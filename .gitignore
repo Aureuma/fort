@@ -1,0 +1,6 @@
+tickets/
+bin/
+.dist/
+*.log
+*.tmp
+fort-state.json
