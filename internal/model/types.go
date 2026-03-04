@@ -20,12 +20,29 @@ const (
 type Operation string
 
 const (
-	OpGet   Operation = "get"
-	OpSet   Operation = "set"
-	OpRun   Operation = "run"
-	OpList  Operation = "list"
-	OpBatch Operation = "batch-get"
+	OpGet      Operation = "get"
+	OpSet      Operation = "set"
+	OpRun      Operation = "run"
+	OpList     Operation = "list"
+	OpBatchGet Operation = "batch-get"
+	OpAny      Operation = "*"
 )
+
+func NormalizeOperation(op Operation) Operation {
+	if op == OpBatchGet {
+		return OpGet
+	}
+	return op
+}
+
+func IsSupportedOperation(op Operation) bool {
+	switch op {
+	case OpGet, OpSet, OpRun, OpList, OpBatchGet, OpAny:
+		return true
+	default:
+		return false
+	}
+}
 
 type Agent struct {
 	ID                string      `json:"id"`
@@ -59,17 +76,17 @@ type TokenRecord struct {
 }
 
 type RunSession struct {
-	ID          string    `json:"id"`
-	AgentID     string    `json:"agent_id"`
-	Repo        string    `json:"repo"`
-	Env         string    `json:"env"`
-	Keys        []string  `json:"keys"`
-	Mode        string    `json:"mode"`
-	OneTimeJTI  string    `json:"one_time_jti"`
-	ExpiresAt   time.Time `json:"expires_at"`
-	UsedAt      time.Time `json:"used_at,omitempty"`
-	CreatedAt   time.Time `json:"created_at"`
-	Materialized bool     `json:"materialized"`
+	ID           string    `json:"id"`
+	AgentID      string    `json:"agent_id"`
+	Repo         string    `json:"repo"`
+	Env          string    `json:"env"`
+	Keys         []string  `json:"keys"`
+	Mode         string    `json:"mode"`
+	OneTimeToken string    `json:"one_time_token"`
+	ExpiresAt    time.Time `json:"expires_at"`
+	UsedAt       time.Time `json:"used_at,omitempty"`
+	CreatedAt    time.Time `json:"created_at"`
+	Materialized bool      `json:"materialized"`
 }
 
 type AuditEvent struct {

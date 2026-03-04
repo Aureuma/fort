@@ -17,15 +17,16 @@ import (
 var (
 	ErrNotFound = errors.New("not found")
 	ErrConflict = errors.New("conflict")
+	ErrInvalid  = errors.New("invalid")
 )
 
 type persistentState struct {
-	Agents   map[string]model.Agent                `json:"agents"`
-	Policies map[string]model.Policy               `json:"policies"`
+	Agents   map[string]model.Agent                  `json:"agents"`
+	Policies map[string]model.Policy                 `json:"policies"`
 	Secrets  map[string]map[string]map[string]string `json:"secrets"`
-	Tokens   map[string]model.TokenRecord          `json:"tokens"`
-	Sessions map[string]model.RunSession           `json:"sessions"`
-	Audit    []model.AuditEvent                    `json:"audit"`
+	Tokens   map[string]model.TokenRecord            `json:"tokens"`
+	Sessions map[string]model.RunSession             `json:"sessions"`
+	Audit    []model.AuditEvent                      `json:"audit"`
 }
 
 type Store struct {
@@ -51,8 +52,12 @@ func New(path string) (*Store, error) {
 }
 
 func (s *Store) load() error {
+	if strings.TrimSpace(s.path) == "" {
+		return nil
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	b, err := os.ReadFile(s.path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -63,6 +68,7 @@ func (s *Store) load() error {
 	if len(strings.TrimSpace(string(b))) == 0 {
 		return nil
 	}
+
 	var st persistentState
 	if err := json.Unmarshal(b, &st); err != nil {
 		return fmt.Errorf("decode state: %w", err)
@@ -82,12 +88,15 @@ func (s *Store) load() error {
 	if st.Sessions == nil {
 		st.Sessions = map[string]model.RunSession{}
 	}
+	if st.Audit == nil {
+		st.Audit = []model.AuditEvent{}
+	}
 	s.state = st
 	return nil
 }
 
 func (s *Store) persistLocked() error {
-	if s.path == "" {
+	if strings.TrimSpace(s.path) == "" {
 		return nil
 	}
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
@@ -104,9 +113,43 @@ func (s *Store) persistLocked() error {
 	return os.Rename(tmp, s.path)
 }
 
+func validAgentType(t model.AgentType) bool {
+	switch t {
+	case model.AgentTypeWorkload, model.AgentTypeUser, model.AgentTypeCI:
+		return true
+	default:
+		return false
+	}
+}
+
+func validAgentStatus(status model.AgentStatus) bool {
+	switch status {
+	case model.AgentStatusActive, model.AgentStatusDisabled:
+		return true
+	default:
+		return false
+	}
+}
+
 func (s *Store) CreateAgent(id string, t model.AgentType, status model.AgentStatus, now time.Time) (model.Agent, error) {
+	id = strings.TrimSpace(id)
+	if id == "" {
+		return model.Agent{}, ErrInvalid
+	}
+	if t == "" {
+		t = model.AgentTypeWorkload
+	}
+	if status == "" {
+		status = model.AgentStatusActive
+	}
+	if !validAgentType(t) || !validAgentStatus(status) {
+		return model.Agent{}, ErrInvalid
+	}
+
+	now = now.UTC()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	if _, ok := s.state.Agents[id]; ok {
 		return model.Agent{}, ErrConflict
 	}
@@ -128,6 +171,7 @@ func (s *Store) CreateAgent(id string, t model.AgentType, status model.AgentStat
 func (s *Store) GetAgent(id string) (model.Agent, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+
 	a, ok := s.state.Agents[id]
 	if !ok {
 		return model.Agent{}, ErrNotFound
@@ -138,6 +182,7 @@ func (s *Store) GetAgent(id string) (model.Agent, error) {
 func (s *Store) ListAgents(filterType model.AgentType, filterStatus model.AgentStatus) []model.Agent {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+
 	out := make([]model.Agent, 0, len(s.state.Agents))
 	for _, a := range s.state.Agents {
 		if filterType != "" && a.Type != filterType {
@@ -153,8 +198,13 @@ func (s *Store) ListAgents(filterType model.AgentType, filterStatus model.AgentS
 }
 
 func (s *Store) SetAgentStatus(id string, status model.AgentStatus, now time.Time) (model.Agent, error) {
+	if !validAgentStatus(status) {
+		return model.Agent{}, ErrInvalid
+	}
+	now = now.UTC()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	a, ok := s.state.Agents[id]
 	if !ok {
 		return model.Agent{}, ErrNotFound
@@ -169,8 +219,10 @@ func (s *Store) SetAgentStatus(id string, status model.AgentStatus, now time.Tim
 }
 
 func (s *Store) RotateAgent(id string, now time.Time) (model.Agent, error) {
+	now = now.UTC()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	a, ok := s.state.Agents[id]
 	if !ok {
 		return model.Agent{}, ErrNotFound
@@ -187,36 +239,75 @@ func (s *Store) RotateAgent(id string, now time.Time) (model.Agent, error) {
 func (s *Store) RemoveAgent(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	if _, ok := s.state.Agents[id]; !ok {
 		return ErrNotFound
 	}
 	delete(s.state.Agents, id)
 	delete(s.state.Policies, id)
-	if err := s.persistLocked(); err != nil {
-		return err
+	for jti, tok := range s.state.Tokens {
+		if tok.AgentID == id {
+			delete(s.state.Tokens, jti)
+		}
 	}
-	return nil
+	for sessID, sess := range s.state.Sessions {
+		if sess.AgentID == id {
+			delete(s.state.Sessions, sessID)
+		}
+	}
+	return s.persistLocked()
 }
 
 func normalizeOps(ops []model.Operation) []model.Operation {
-	m := map[model.Operation]struct{}{}
+	seen := map[model.Operation]struct{}{}
 	for _, op := range ops {
-		if op == model.OpBatch {
-			op = model.OpGet
+		op = model.NormalizeOperation(model.Operation(strings.TrimSpace(string(op))))
+		if !model.IsSupportedOperation(op) {
+			continue
 		}
-		m[op] = struct{}{}
+		if op == model.OpAny {
+			return []model.Operation{model.OpAny}
+		}
+		seen[op] = struct{}{}
 	}
-	out := make([]model.Operation, 0, len(m))
-	for op := range m {
+	out := make([]model.Operation, 0, len(seen))
+	for op := range seen {
 		out = append(out, op)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i] < out[j] })
 	return out
 }
 
+func normalizeBinding(binding model.Binding) (model.Binding, bool) {
+	binding.Repo = strings.TrimSpace(binding.Repo)
+	binding.Env = strings.TrimSpace(binding.Env)
+	binding.Ops = normalizeOps(binding.Ops)
+	if binding.Repo == "" || binding.Env == "" || len(binding.Ops) == 0 {
+		return model.Binding{}, false
+	}
+	return binding, true
+}
+
+func bindingKey(binding model.Binding) string {
+	opParts := make([]string, 0, len(binding.Ops))
+	for _, op := range binding.Ops {
+		opParts = append(opParts, string(op))
+	}
+	return binding.Repo + "|" + binding.Env + "|" + strings.Join(opParts, ",")
+}
+
+func sortBindings(bindings []model.Binding) {
+	sort.Slice(bindings, func(i, j int) bool {
+		a := bindingKey(bindings[i])
+		b := bindingKey(bindings[j])
+		return a < b
+	})
+}
+
 func (s *Store) GetPolicy(agentID string) (model.Policy, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+
 	p, ok := s.state.Policies[agentID]
 	if !ok {
 		return model.Policy{AgentID: agentID, Bindings: []model.Binding{}}, nil
@@ -225,21 +316,30 @@ func (s *Store) GetPolicy(agentID string) (model.Policy, error) {
 }
 
 func (s *Store) SetPolicy(agentID string, bindings []model.Binding, now time.Time) (model.Policy, error) {
+	now = now.UTC()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	if _, ok := s.state.Agents[agentID]; !ok {
 		return model.Policy{}, ErrNotFound
 	}
+
 	norm := make([]model.Binding, 0, len(bindings))
-	for _, b := range bindings {
-		b.Repo = strings.TrimSpace(b.Repo)
-		b.Env = strings.TrimSpace(b.Env)
-		b.Ops = normalizeOps(b.Ops)
-		if b.Repo == "" || b.Env == "" || len(b.Ops) == 0 {
+	seen := map[string]struct{}{}
+	for _, binding := range bindings {
+		normalized, ok := normalizeBinding(binding)
+		if !ok {
 			continue
 		}
-		norm = append(norm, b)
+		k := bindingKey(normalized)
+		if _, exists := seen[k]; exists {
+			continue
+		}
+		seen[k] = struct{}{}
+		norm = append(norm, normalized)
 	}
+	sortBindings(norm)
+
 	p := model.Policy{AgentID: agentID, Bindings: norm, UpdatedAt: now}
 	s.state.Policies[agentID] = p
 	if err := s.persistLocked(); err != nil {
@@ -264,34 +364,50 @@ func sameBinding(a, b model.Binding) bool {
 }
 
 func (s *Store) AddBinding(agentID string, binding model.Binding, now time.Time) (model.Policy, error) {
+	if _, err := s.GetAgent(agentID); err != nil {
+		return model.Policy{}, err
+	}
+	normalized, ok := normalizeBinding(binding)
+	if !ok {
+		return model.Policy{}, ErrInvalid
+	}
 	p, err := s.GetPolicy(agentID)
 	if err != nil {
 		return model.Policy{}, err
 	}
-	binding.Ops = normalizeOps(binding.Ops)
 	for _, b := range p.Bindings {
-		if sameBinding(b, binding) {
+		if sameBinding(b, normalized) {
 			return p, nil
 		}
 	}
-	p.Bindings = append(p.Bindings, binding)
+	p.Bindings = append(p.Bindings, normalized)
 	return s.SetPolicy(agentID, p.Bindings, now)
 }
 
 func (s *Store) RemoveBinding(agentID string, binding model.Binding, now time.Time) (model.Policy, error) {
+	if _, err := s.GetAgent(agentID); err != nil {
+		return model.Policy{}, err
+	}
+	normalized, ok := normalizeBinding(binding)
+	if !ok {
+		return model.Policy{}, ErrInvalid
+	}
 	p, err := s.GetPolicy(agentID)
 	if err != nil {
 		return model.Policy{}, err
 	}
-	binding.Ops = normalizeOps(binding.Ops)
 	out := make([]model.Binding, 0, len(p.Bindings))
 	for _, b := range p.Bindings {
-		if sameBinding(b, binding) {
+		if sameBinding(b, normalized) {
 			continue
 		}
 		out = append(out, b)
 	}
 	return s.SetPolicy(agentID, out, now)
+}
+
+func matchPattern(pattern, value string) bool {
+	return pattern == "*" || pattern == value
 }
 
 func (s *Store) CheckPermission(agentID, repo, env string, op model.Operation) (bool, string) {
@@ -302,13 +418,18 @@ func (s *Store) CheckPermission(agentID, repo, env string, op model.Operation) (
 	if a.Status != model.AgentStatusActive {
 		return false, "agent_disabled"
 	}
+
+	op = model.NormalizeOperation(op)
+	if !model.IsSupportedOperation(op) {
+		return false, "unsupported_op"
+	}
 	p, _ := s.GetPolicy(agentID)
 	for _, b := range p.Bindings {
-		if b.Repo != repo || b.Env != env {
+		if !matchPattern(b.Repo, repo) || !matchPattern(b.Env, env) {
 			continue
 		}
 		for _, allowed := range b.Ops {
-			if allowed == op || (op == model.OpBatch && allowed == model.OpGet) {
+			if allowed == model.OpAny || model.NormalizeOperation(allowed) == op {
 				return true, "allowed"
 			}
 		}
@@ -317,8 +438,16 @@ func (s *Store) CheckPermission(agentID, repo, env string, op model.Operation) (
 }
 
 func (s *Store) SetSecret(repo, env, key, value string) error {
+	repo = strings.TrimSpace(repo)
+	env = strings.TrimSpace(env)
+	key = strings.TrimSpace(key)
+	if repo == "" || env == "" || key == "" {
+		return ErrInvalid
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	if _, ok := s.state.Secrets[repo]; !ok {
 		s.state.Secrets[repo] = map[string]map[string]string{}
 	}
@@ -330,15 +459,25 @@ func (s *Store) SetSecret(repo, env, key, value string) error {
 }
 
 func (s *Store) GetSecret(repo, env, key string) (string, error) {
+	repo = strings.TrimSpace(repo)
+	env = strings.TrimSpace(env)
+	key = strings.TrimSpace(key)
+	if repo == "" || env == "" || key == "" {
+		return "", ErrInvalid
+	}
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	if _, ok := s.state.Secrets[repo]; !ok {
+
+	envMap, ok := s.state.Secrets[repo]
+	if !ok {
 		return "", ErrNotFound
 	}
-	if _, ok := s.state.Secrets[repo][env]; !ok {
+	keys, ok := envMap[env]
+	if !ok {
 		return "", ErrNotFound
 	}
-	v, ok := s.state.Secrets[repo][env][key]
+	v, ok := keys[key]
 	if !ok {
 		return "", ErrNotFound
 	}
@@ -346,13 +485,13 @@ func (s *Store) GetSecret(repo, env, key string) (string, error) {
 }
 
 func (s *Store) BatchGet(repo, env string, keys []string) (map[string]string, error) {
-	out := map[string]string{}
-	for _, k := range keys {
-		v, err := s.GetSecret(repo, env, k)
+	out := make(map[string]string, len(keys))
+	for _, key := range keys {
+		v, err := s.GetSecret(repo, env, key)
 		if err != nil {
 			return nil, err
 		}
-		out[k] = v
+		out[strings.TrimSpace(key)] = v
 	}
 	return out, nil
 }
@@ -360,21 +499,33 @@ func (s *Store) BatchGet(repo, env string, keys []string) (map[string]string, er
 func (s *Store) ListSecretKeys(repo, env, prefix string) []string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	out := []string{}
-	envMap := s.state.Secrets[repo][env]
-	for k := range envMap {
-		if prefix != "" && !strings.HasPrefix(k, prefix) {
+
+	envMap, ok := s.state.Secrets[repo]
+	if !ok {
+		return []string{}
+	}
+	keyMap, ok := envMap[env]
+	if !ok {
+		return []string{}
+	}
+	out := make([]string, 0, len(keyMap))
+	for key := range keyMap {
+		if prefix != "" && !strings.HasPrefix(key, prefix) {
 			continue
 		}
-		out = append(out, k)
+		out = append(out, key)
 	}
 	sort.Strings(out)
 	return out
 }
 
 func (s *Store) PutToken(rec model.TokenRecord) error {
+	if strings.TrimSpace(rec.JTI) == "" {
+		return ErrInvalid
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	s.state.Tokens[rec.JTI] = rec
 	return s.persistLocked()
 }
@@ -382,6 +533,7 @@ func (s *Store) PutToken(rec model.TokenRecord) error {
 func (s *Store) GetToken(jti string) (model.TokenRecord, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+
 	rec, ok := s.state.Tokens[jti]
 	if !ok {
 		return model.TokenRecord{}, ErrNotFound
@@ -390,8 +542,10 @@ func (s *Store) GetToken(jti string) (model.TokenRecord, error) {
 }
 
 func (s *Store) ListTokens(agentID string, activeOnly bool, now time.Time) []model.TokenRecord {
+	now = now.UTC()
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+
 	out := make([]model.TokenRecord, 0, len(s.state.Tokens))
 	for _, t := range s.state.Tokens {
 		if agentID != "" && t.AgentID != agentID {
@@ -402,19 +556,28 @@ func (s *Store) ListTokens(agentID string, activeOnly bool, now time.Time) []mod
 		}
 		out = append(out, t)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].IssuedAt.After(out[j].IssuedAt) })
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].IssuedAt.Equal(out[j].IssuedAt) {
+			return out[i].JTI < out[j].JTI
+		}
+		return out[i].IssuedAt.After(out[j].IssuedAt)
+	})
 	return out
 }
 
 func (s *Store) RevokeToken(jti, reason string, now time.Time) (model.TokenRecord, error) {
+	now = now.UTC()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	t, ok := s.state.Tokens[jti]
 	if !ok {
 		return model.TokenRecord{}, ErrNotFound
 	}
-	t.RevokedAt = now
-	t.Reason = reason
+	if t.RevokedAt.IsZero() {
+		t.RevokedAt = now
+	}
+	t.Reason = strings.TrimSpace(reason)
 	s.state.Tokens[jti] = t
 	if err := s.persistLocked(); err != nil {
 		return model.TokenRecord{}, err
@@ -423,8 +586,15 @@ func (s *Store) RevokeToken(jti, reason string, now time.Time) (model.TokenRecor
 }
 
 func (s *Store) PutSession(sess model.RunSession) error {
+	if strings.TrimSpace(sess.ID) == "" {
+		return ErrInvalid
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if _, exists := s.state.Sessions[sess.ID]; exists {
+		return ErrConflict
+	}
 	s.state.Sessions[sess.ID] = sess
 	return s.persistLocked()
 }
@@ -432,6 +602,7 @@ func (s *Store) PutSession(sess model.RunSession) error {
 func (s *Store) GetSession(id string) (model.RunSession, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
+
 	sess, ok := s.state.Sessions[id]
 	if !ok {
 		return model.RunSession{}, ErrNotFound
@@ -440,11 +611,16 @@ func (s *Store) GetSession(id string) (model.RunSession, error) {
 }
 
 func (s *Store) MarkSessionUsed(id string, now time.Time) (model.RunSession, error) {
+	now = now.UTC()
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	sess, ok := s.state.Sessions[id]
 	if !ok {
 		return model.RunSession{}, ErrNotFound
+	}
+	if sess.Materialized {
+		return model.RunSession{}, ErrConflict
 	}
 	sess.Materialized = true
 	sess.UsedAt = now
@@ -458,6 +634,7 @@ func (s *Store) MarkSessionUsed(id string, now time.Time) (model.RunSession, err
 func (s *Store) CloseSession(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
 	if _, ok := s.state.Sessions[id]; !ok {
 		return ErrNotFound
 	}
@@ -468,9 +645,27 @@ func (s *Store) CloseSession(id string) error {
 func (s *Store) AddAudit(e model.AuditEvent) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	if e.CreatedAt.IsZero() {
+		e.CreatedAt = time.Now().UTC()
+	}
 	s.state.Audit = append(s.state.Audit, e)
 	if len(s.state.Audit) > 5000 {
 		s.state.Audit = s.state.Audit[len(s.state.Audit)-5000:]
 	}
 	return s.persistLocked()
+}
+
+func (s *Store) ListAudit(limit int) []model.AuditEvent {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if limit <= 0 || limit > len(s.state.Audit) {
+		limit = len(s.state.Audit)
+	}
+	out := make([]model.AuditEvent, 0, limit)
+	for i := len(s.state.Audit) - 1; i >= 0 && len(out) < limit; i-- {
+		out = append(out, s.state.Audit[i])
+	}
+	return out
 }

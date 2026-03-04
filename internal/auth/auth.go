@@ -83,8 +83,9 @@ func (m *Manager) Issue(agent model.Agent, ttl time.Duration, audience string) (
 }
 
 func (m *Manager) Parse(token string) (Claims, error) {
-	parsed, err := jwt.ParseWithClaims(token, &Claims{}, func(t *jwt.Token) (any, error) {
-		if t.Method != jwt.SigningMethodHS256 {
+	parser := jwt.NewParser(jwt.WithTimeFunc(m.now))
+	parsed, err := parser.ParseWithClaims(token, &Claims{}, func(t *jwt.Token) (any, error) {
+		if t.Method == nil || t.Method.Alg() != jwt.SigningMethodHS256.Alg() {
 			return nil, fmt.Errorf("unexpected signing method")
 		}
 		return m.SigningKey, nil
