@@ -1,0 +1,30 @@
+kind: service
+meta:
+  name: fort-api
+  labels:
+    app_code: fort
+router:
+  mode: none
+service:
+  image: aureuma/fort:latest
+  command:
+    - /usr/local/bin/fortd
+  env:
+    FORT_ADDR: ":8088"
+    FORT_STATE_PATH: "/var/lib/fort/state.json"
+    FORT_JWT_SIGNING_KEY: "change-me"
+    FORT_BOOTSTRAP_KEY: "change-me"
+    FORT_TOKEN_TTL: "15m"
+    FORT_RUN_TTL: "60s"
+    FORT_SECRET_TTL: "120s"
+  ports:
+    - host: "127.0.0.1:8088"
+      container: 8088
+  volumes:
+    - "/var/lib/fort:/var/lib/fort"
+  health:
+    kind: http
+    url: "http://127.0.0.1:8088/v1/health"
+    interval: 3s
+    timeout: 2s
+    startup_grace: 2s

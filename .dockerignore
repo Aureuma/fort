@@ -1,0 +1,8 @@
+.git
+.gitignore
+.dist
+.tmp
+bin
+tickets
+*.log
+*.tmp
