@@ -6,7 +6,11 @@ meta:
 router:
   mode: none
 service:
-  image: aureuma/fort:latest
+  deploy_mode: inplace
+  keep_previous: false
+  build:
+    context: /home/shawn/Development/fort
+    dockerfile: /home/shawn/Development/fort/Dockerfile
   command:
     - /usr/local/bin/fortd
   env:
@@ -18,13 +22,12 @@ service:
     FORT_RUN_TTL: "60s"
     FORT_SECRET_TTL: "120s"
   ports:
-    - host: "127.0.0.1:8088"
+    - host: "0.0.0.0:18089"
       container: 8088
+  networks:
+    - viva-shared
+    - si
   volumes:
     - "/var/lib/fort:/var/lib/fort"
   health:
-    kind: http
-    url: "http://127.0.0.1:8088/v1/health"
-    interval: 3s
-    timeout: 2s
-    startup_grace: 2s
+    kind: none
