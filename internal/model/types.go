@@ -75,6 +75,18 @@ type TokenRecord struct {
 	Reason    string    `json:"reason,omitempty"`
 }
 
+type RefreshSession struct {
+	ID               string    `json:"id"`
+	AgentID          string    `json:"agent_id"`
+	Audience         string    `json:"audience"`
+	AccessTTLSeconds int64     `json:"access_ttl_seconds"`
+	RefreshTokenHash string    `json:"refresh_token_hash"`
+	RefreshExpiresAt time.Time `json:"refresh_expires_at"`
+	CreatedAt        time.Time `json:"created_at"`
+	UpdatedAt        time.Time `json:"updated_at"`
+	RevokedAt        time.Time `json:"revoked_at,omitempty"`
+}
+
 type RunSession struct {
 	ID           string    `json:"id"`
 	AgentID      string    `json:"agent_id"`

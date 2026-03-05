@@ -64,3 +64,44 @@ func TestParseExpired(t *testing.T) {
 		t.Fatalf("expected unauthorized for expired token, got %v", err)
 	}
 }
+
+func TestRefreshSessionLifecycle(t *testing.T) {
+	now := time.Date(2026, 3, 4, 12, 0, 0, 0, time.UTC)
+	mgr, _, agent := newAuthManager(t, now)
+
+	accessToken, rec, session, refreshToken, err := mgr.OpenRefreshSession(agent, 2*time.Minute, time.Hour, "fort-api")
+	if err != nil {
+		t.Fatalf("open refresh session: %v", err)
+	}
+	if accessToken == "" || rec.JTI == "" || session.ID == "" || refreshToken == "" {
+		t.Fatalf("expected non-empty session artifacts")
+	}
+	if _, err := mgr.Parse(accessToken); err != nil {
+		t.Fatalf("parse opened access token: %v", err)
+	}
+
+	mgr.Now = func() time.Time { return now.Add(30 * time.Second) }
+	accessToken2, rec2, session2, refreshToken2, err := mgr.RefreshByToken(refreshToken)
+	if err != nil {
+		t.Fatalf("refresh by token: %v", err)
+	}
+	if accessToken2 == "" || rec2.JTI == "" || refreshToken2 == "" {
+		t.Fatalf("expected refreshed session artifacts")
+	}
+	if session2.ID != session.ID {
+		t.Fatalf("expected same session id, got %s vs %s", session2.ID, session.ID)
+	}
+	if refreshToken2 == refreshToken {
+		t.Fatalf("expected rotated refresh token")
+	}
+	if _, _, _, _, err := mgr.RefreshByToken(refreshToken); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("expected old refresh token to be unauthorized, got %v", err)
+	}
+
+	if _, err := mgr.CloseRefreshSessionByToken(refreshToken2); err != nil {
+		t.Fatalf("close by token: %v", err)
+	}
+	if _, _, _, _, err := mgr.RefreshByToken(refreshToken2); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("expected unauthorized after close, got %v", err)
+	}
+}

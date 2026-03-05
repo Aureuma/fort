@@ -129,6 +129,18 @@ func TestRemoveAgentRemovesRelatedTokensAndSessions(t *testing.T) {
 	if err := st.PutToken(model.TokenRecord{JTI: "t1", AgentID: "a1", IssuedAt: now, ExpiresAt: now.Add(time.Hour)}); err != nil {
 		t.Fatalf("put token: %v", err)
 	}
+	if err := st.PutRefreshSession(model.RefreshSession{
+		ID:               "rs1",
+		AgentID:          "a1",
+		Audience:         "fort-api",
+		AccessTTLSeconds: 600,
+		RefreshTokenHash: "hash",
+		RefreshExpiresAt: now.Add(time.Hour),
+		CreatedAt:        now,
+		UpdatedAt:        now,
+	}); err != nil {
+		t.Fatalf("put refresh session: %v", err)
+	}
 	if err := st.PutSession(model.RunSession{ID: "s1", AgentID: "a1", ExpiresAt: now.Add(time.Minute), CreatedAt: now}); err != nil {
 		t.Fatalf("put session: %v", err)
 	}
@@ -139,7 +151,52 @@ func TestRemoveAgentRemovesRelatedTokensAndSessions(t *testing.T) {
 	if _, err := st.GetToken("t1"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected token removed, got %v", err)
 	}
+	if _, err := st.GetRefreshSession("rs1"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected refresh session removed, got %v", err)
+	}
 	if _, err := st.GetSession("s1"); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected session removed, got %v", err)
+	}
+}
+
+func TestRefreshSessionLookupRotateAndRevoke(t *testing.T) {
+	st := newTestStore(t)
+	now := time.Now().UTC()
+	session := model.RefreshSession{
+		ID:               "rs1",
+		AgentID:          "agent-a",
+		Audience:         "fort-api",
+		AccessTTLSeconds: 300,
+		RefreshTokenHash: hashRefreshToken("refresh-1"),
+		RefreshExpiresAt: now.Add(time.Hour),
+		CreatedAt:        now,
+		UpdatedAt:        now,
+	}
+	if err := st.PutRefreshSession(session); err != nil {
+		t.Fatalf("put refresh session: %v", err)
+	}
+	got, err := st.GetRefreshSessionByToken("refresh-1")
+	if err != nil {
+		t.Fatalf("lookup by token: %v", err)
+	}
+	if got.ID != "rs1" {
+		t.Fatalf("unexpected session id: %s", got.ID)
+	}
+	got, err = st.RotateRefreshSessionToken("rs1", "refresh-2", now.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("rotate token: %v", err)
+	}
+	if got.RefreshTokenHash != hashRefreshToken("refresh-2") {
+		t.Fatalf("refresh token hash not rotated")
+	}
+	if _, err := st.GetRefreshSessionByToken("refresh-1"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected old token lookup to fail, got %v", err)
+	}
+	got, err = st.RevokeRefreshSessionByToken("refresh-2", now.Add(2*time.Minute))
+	if err != nil {
+		t.Fatalf("revoke by token: %v", err)
+	}
+	if got.RevokedAt.IsZero() {
+		t.Fatalf("expected revoked timestamp")
 	}
 }

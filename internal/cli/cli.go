@@ -101,7 +101,7 @@ func usageRoot() error {
 commands:
   doctor
   version
-  auth issue|whoami|login|list|revoke
+  auth issue|whoami|login|list|revoke|session
   get
   set
   list
@@ -236,9 +236,11 @@ func (c *Client) cmdDoctor(args []string) error {
 
 func (c *Client) cmdAuth(args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: fort auth issue|whoami|login|list|revoke")
+		return errors.New("usage: fort auth issue|whoami|login|list|revoke|session")
 	}
 	switch args[0] {
+	case "session":
+		return c.cmdAuthSession(args[1:])
 	case "issue", "login":
 		fs := flag.NewFlagSet("fort auth issue", flag.ContinueOnError)
 		fs.SetOutput(io.Discard)
@@ -354,7 +356,121 @@ func (c *Client) cmdAuth(args []string) error {
 		printTextf("revoked %s\n", *jti)
 		return nil
 	default:
-		return errors.New("usage: fort auth issue|whoami|login|list|revoke")
+		return errors.New("usage: fort auth issue|whoami|login|list|revoke|session")
+	}
+}
+
+func (c *Client) cmdAuthSession(args []string) error {
+	if len(args) == 0 {
+		return errors.New("usage: fort auth session open|refresh|close")
+	}
+	switch args[0] {
+	case "open":
+		fs := flag.NewFlagSet("fort auth session open", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		agentID := fs.String("agent", "", "agent id")
+		aud := fs.String("aud", "fort-api", "audience")
+		accessTTL := fs.String("access-ttl", "", "access token ttl")
+		refreshTTL := fs.String("refresh-ttl", "", "refresh session ttl")
+		if err := fs.Parse(args[1:]); err != nil {
+			return errors.New("usage: fort auth session open --agent <id> [--access-ttl 15m] [--refresh-ttl 24h] [--aud fort-api]")
+		}
+		if strings.TrimSpace(*agentID) == "" {
+			return errors.New("--agent is required")
+		}
+		body := map[string]any{
+			"agent_id": strings.TrimSpace(*agentID),
+			"aud":      strings.TrimSpace(*aud),
+		}
+		if strings.TrimSpace(*accessTTL) != "" {
+			body["access_ttl"] = strings.TrimSpace(*accessTTL)
+		}
+		if strings.TrimSpace(*refreshTTL) != "" {
+			body["refresh_ttl"] = strings.TrimSpace(*refreshTTL)
+		}
+		useToken := c.Token != ""
+		useBootstrap := c.BootstrapKey != ""
+		if !useToken && !useBootstrap {
+			return errors.New("auth session open requires --token (admin token) or --bootstrap-key")
+		}
+		status, resp, err := c.apiRequest(http.MethodPost, "/v1/auth/session/open", body, useToken, useBootstrap)
+		if err != nil {
+			return err
+		}
+		if status != http.StatusOK {
+			return apiErr(status, resp)
+		}
+		if c.JSON {
+			return printJSON(resp)
+		}
+		printTextf("session_id=%v\n", resp["session_id"])
+		printTextf("access_token=%v\n", resp["access_token"])
+		printTextf("refresh_token=%v\n", resp["refresh_token"])
+		printTextf("access_expires_at=%v\n", resp["access_expires_at"])
+		printTextf("refresh_expires_at=%v\n", resp["refresh_expires_at"])
+		return nil
+	case "refresh":
+		fs := flag.NewFlagSet("fort auth session refresh", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		refreshToken := fs.String("refresh-token", "", "refresh token")
+		if err := fs.Parse(args[1:]); err != nil {
+			return errors.New("usage: fort auth session refresh --refresh-token <token>")
+		}
+		if strings.TrimSpace(*refreshToken) == "" {
+			return errors.New("--refresh-token is required")
+		}
+		status, resp, err := c.apiRequest(http.MethodPost, "/v1/auth/session/refresh", map[string]any{
+			"refresh_token": strings.TrimSpace(*refreshToken),
+		}, false, false)
+		if err != nil {
+			return err
+		}
+		if status != http.StatusOK {
+			return apiErr(status, resp)
+		}
+		if c.JSON {
+			return printJSON(resp)
+		}
+		printTextf("session_id=%v\n", resp["session_id"])
+		printTextf("access_token=%v\n", resp["access_token"])
+		printTextf("refresh_token=%v\n", resp["refresh_token"])
+		printTextf("access_expires_at=%v\n", resp["access_expires_at"])
+		printTextf("refresh_expires_at=%v\n", resp["refresh_expires_at"])
+		return nil
+	case "close":
+		fs := flag.NewFlagSet("fort auth session close", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		sessionID := fs.String("session-id", "", "session id")
+		refreshToken := fs.String("refresh-token", "", "refresh token")
+		if err := fs.Parse(args[1:]); err != nil {
+			return errors.New("usage: fort auth session close [--session-id <id> | --refresh-token <token>]")
+		}
+		if strings.TrimSpace(*sessionID) == "" && strings.TrimSpace(*refreshToken) == "" {
+			return errors.New("--session-id or --refresh-token is required")
+		}
+		useToken := strings.TrimSpace(*sessionID) != ""
+		useBootstrap := false
+		if useToken && c.Token == "" && c.BootstrapKey != "" {
+			useBootstrap = true
+			useToken = false
+		}
+		status, resp, err := c.apiRequest(http.MethodPost, "/v1/auth/session/close", map[string]any{
+			"session_id":    strings.TrimSpace(*sessionID),
+			"refresh_token": strings.TrimSpace(*refreshToken),
+		}, useToken, useBootstrap)
+		if err != nil {
+			return err
+		}
+		if status != http.StatusOK {
+			return apiErr(status, resp)
+		}
+		if c.JSON {
+			return printJSON(resp)
+		}
+		printTextf("closed session %v\n", resp["session_id"])
+		return nil
+	default:
+		return errors.New("usage: fort auth session open|refresh|close")
 	}
 }
 

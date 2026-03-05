@@ -240,3 +240,65 @@ func TestDefaultDenyWithoutBinding(t *testing.T) {
 		t.Fatalf("expected forbidden for default deny, got %d", status)
 	}
 }
+
+func TestAuthSessionOpenRefreshAndClose(t *testing.T) {
+	ts, bootstrap := newTestAPI(t)
+	client := ts.Client()
+
+	mustCreateAgent(t, client, ts.URL, bootstrap, "admin", "user")
+	mustSetPolicy(t, client, ts.URL, bootstrap, "admin", []map[string]any{{
+		"repo": "*",
+		"env":  "*",
+		"ops":  []string{"*"},
+	}})
+	mustCreateAgent(t, client, ts.URL, bootstrap, "profile-a", "workload")
+
+	adminToken := mustIssueToken(t, client, ts.URL, bootstrap, "admin", nil)
+	adminHeaders := map[string]string{"Authorization": "Bearer " + adminToken}
+
+	status, body := doJSON(t, client, http.MethodPost, ts.URL+"/v1/auth/session/open", map[string]any{
+		"agent_id":    "profile-a",
+		"access_ttl":  "90s",
+		"refresh_ttl": "10m",
+	}, adminHeaders)
+	if status != http.StatusOK {
+		t.Fatalf("session open failed status=%d body=%v", status, body)
+	}
+	sessionID, _ := body["session_id"].(string)
+	refreshToken, _ := body["refresh_token"].(string)
+	if sessionID == "" || refreshToken == "" {
+		t.Fatalf("missing open session fields: %v", body)
+	}
+
+	status, body = doJSON(t, client, http.MethodPost, ts.URL+"/v1/auth/session/refresh", map[string]any{
+		"refresh_token": refreshToken,
+	}, nil)
+	if status != http.StatusOK {
+		t.Fatalf("session refresh failed status=%d body=%v", status, body)
+	}
+	refreshToken2, _ := body["refresh_token"].(string)
+	if refreshToken2 == "" || refreshToken2 == refreshToken {
+		t.Fatalf("expected rotated refresh token, got %v", body["refresh_token"])
+	}
+
+	status, _ = doJSON(t, client, http.MethodPost, ts.URL+"/v1/auth/session/refresh", map[string]any{
+		"refresh_token": refreshToken,
+	}, nil)
+	if status != http.StatusUnauthorized {
+		t.Fatalf("expected unauthorized for old refresh token, got %d", status)
+	}
+
+	status, body = doJSON(t, client, http.MethodPost, ts.URL+"/v1/auth/session/close", map[string]any{
+		"session_id": sessionID,
+	}, adminHeaders)
+	if status != http.StatusOK {
+		t.Fatalf("session close failed status=%d body=%v", status, body)
+	}
+
+	status, _ = doJSON(t, client, http.MethodPost, ts.URL+"/v1/auth/session/refresh", map[string]any{
+		"refresh_token": refreshToken2,
+	}, nil)
+	if status != http.StatusUnauthorized {
+		t.Fatalf("expected unauthorized after close, got %d", status)
+	}
+}

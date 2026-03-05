@@ -57,6 +57,9 @@ func (h *handler) routes() {
 	h.mux.HandleFunc("GET /v1/ready", h.handleReady)
 
 	h.mux.HandleFunc("POST /v1/auth/token", h.handleAuthToken)
+	h.mux.HandleFunc("POST /v1/auth/session/open", h.handleAuthSessionOpen)
+	h.mux.HandleFunc("POST /v1/auth/session/refresh", h.handleAuthSessionRefresh)
+	h.mux.HandleFunc("POST /v1/auth/session/close", h.handleAuthSessionClose)
 	h.mux.HandleFunc("GET /v1/auth/whoami", h.handleAuthWhoAmI)
 	h.mux.HandleFunc("GET /v1/auth/list", h.handleAuthList)
 	h.mux.HandleFunc("POST /v1/auth/revoke", h.handleAuthRevoke)
@@ -280,6 +283,162 @@ func (h *handler) handleAuthToken(w http.ResponseWriter, r *http.Request) {
 		"issued_at":  rec.IssuedAt,
 		"expires_at": rec.ExpiresAt,
 	})
+}
+
+func (h *handler) handleAuthSessionOpen(w http.ResponseWriter, r *http.Request) {
+	if _, ok := h.requireAdmin(w, r); !ok {
+		return
+	}
+	var req struct {
+		AgentID           string `json:"agent_id"`
+		Audience          string `json:"aud"`
+		AccessTTL         string `json:"access_ttl"`
+		AccessTTLSeconds  int64  `json:"access_ttl_seconds"`
+		RefreshTTL        string `json:"refresh_ttl"`
+		RefreshTTLSeconds int64  `json:"refresh_ttl_seconds"`
+	}
+	if err := h.parseBody(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	req.AgentID = strings.TrimSpace(req.AgentID)
+	if req.AgentID == "" {
+		writeError(w, http.StatusBadRequest, "agent_id is required")
+		return
+	}
+	agent, err := h.st.GetAgent(req.AgentID)
+	if err != nil {
+		writeError(w, http.StatusNotFound, "agent not found")
+		return
+	}
+	if agent.Status != model.AgentStatusActive {
+		writeError(w, http.StatusForbidden, "agent is disabled")
+		return
+	}
+	accessTTL, err := parseTTL(req.AccessTTL, req.AccessTTLSeconds, h.cfg.TokenTTL)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid access ttl")
+		return
+	}
+	refreshTTL, err := parseTTL(req.RefreshTTL, req.RefreshTTLSeconds, h.cfg.RefreshSessionTTL)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid refresh ttl")
+		return
+	}
+	aud := strings.TrimSpace(req.Audience)
+	if aud == "" {
+		aud = "fort-api"
+	}
+	token, rec, session, refreshToken, err := h.auth.OpenRefreshSession(agent, accessTTL, refreshTTL, aud)
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "open session failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"session_id":         session.ID,
+		"agent_id":           rec.AgentID,
+		"aud":                rec.Audience,
+		"token_type":         "Bearer",
+		"access_token":       token,
+		"access_jti":         rec.JTI,
+		"access_issued_at":   rec.IssuedAt,
+		"access_expires_at":  rec.ExpiresAt,
+		"refresh_token":      refreshToken,
+		"refresh_expires_at": session.RefreshExpiresAt,
+	})
+}
+
+func (h *handler) handleAuthSessionRefresh(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		RefreshToken string `json:"refresh_token"`
+	}
+	if err := h.parseBody(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	req.RefreshToken = strings.TrimSpace(req.RefreshToken)
+	if req.RefreshToken == "" {
+		writeError(w, http.StatusBadRequest, "refresh_token is required")
+		return
+	}
+	token, rec, session, refreshToken, err := h.auth.RefreshByToken(req.RefreshToken)
+	if err != nil {
+		if errors.Is(err, auth.ErrUnauthorized) {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "refresh failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"session_id":         session.ID,
+		"agent_id":           rec.AgentID,
+		"aud":                rec.Audience,
+		"token_type":         "Bearer",
+		"access_token":       token,
+		"access_jti":         rec.JTI,
+		"access_issued_at":   rec.IssuedAt,
+		"access_expires_at":  rec.ExpiresAt,
+		"refresh_token":      refreshToken,
+		"refresh_expires_at": session.RefreshExpiresAt,
+	})
+}
+
+func (h *handler) handleAuthSessionClose(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		SessionID    string `json:"session_id"`
+		RefreshToken string `json:"refresh_token"`
+	}
+	if err := h.parseBody(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	sessionID := strings.TrimSpace(req.SessionID)
+	refreshToken := strings.TrimSpace(req.RefreshToken)
+	if sessionID == "" && refreshToken == "" {
+		writeError(w, http.StatusBadRequest, "session_id or refresh_token is required")
+		return
+	}
+	if refreshToken != "" {
+		sess, err := h.auth.CloseRefreshSessionByToken(refreshToken)
+		if err != nil {
+			if errors.Is(err, auth.ErrUnauthorized) {
+				writeError(w, http.StatusUnauthorized, "unauthorized")
+				return
+			}
+			writeError(w, http.StatusInternalServerError, "close session failed")
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]any{"ok": true, "session_id": sess.ID})
+		return
+	}
+
+	actor, ok := h.requireActor(w, r)
+	if !ok {
+		return
+	}
+	sess, err := h.st.GetRefreshSession(sessionID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "session not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "lookup failed")
+		return
+	}
+	if actor.AgentID != sess.AgentID && !h.isAdminAgent(actor.AgentID) {
+		writeError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+	if _, err := h.auth.CloseRefreshSessionByID(sessionID); err != nil {
+		if errors.Is(err, auth.ErrUnauthorized) {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "close session failed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "session_id": sessionID})
 }
 
 func (h *handler) handleAuthWhoAmI(w http.ResponseWriter, r *http.Request) {

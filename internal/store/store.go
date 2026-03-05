@@ -1,6 +1,9 @@
 package store
 
 import (
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,12 +24,13 @@ var (
 )
 
 type persistentState struct {
-	Agents   map[string]model.Agent                  `json:"agents"`
-	Policies map[string]model.Policy                 `json:"policies"`
-	Secrets  map[string]map[string]map[string]string `json:"secrets"`
-	Tokens   map[string]model.TokenRecord            `json:"tokens"`
-	Sessions map[string]model.RunSession             `json:"sessions"`
-	Audit    []model.AuditEvent                      `json:"audit"`
+	Agents          map[string]model.Agent                  `json:"agents"`
+	Policies        map[string]model.Policy                 `json:"policies"`
+	Secrets         map[string]map[string]map[string]string `json:"secrets"`
+	Tokens          map[string]model.TokenRecord            `json:"tokens"`
+	RefreshSessions map[string]model.RefreshSession         `json:"refresh_sessions"`
+	Sessions        map[string]model.RunSession             `json:"sessions"`
+	Audit           []model.AuditEvent                      `json:"audit"`
 }
 
 type Store struct {
@@ -38,12 +42,13 @@ type Store struct {
 func New(path string) (*Store, error) {
 	s := &Store{path: path}
 	s.state = persistentState{
-		Agents:   map[string]model.Agent{},
-		Policies: map[string]model.Policy{},
-		Secrets:  map[string]map[string]map[string]string{},
-		Tokens:   map[string]model.TokenRecord{},
-		Sessions: map[string]model.RunSession{},
-		Audit:    make([]model.AuditEvent, 0, 64),
+		Agents:          map[string]model.Agent{},
+		Policies:        map[string]model.Policy{},
+		Secrets:         map[string]map[string]map[string]string{},
+		Tokens:          map[string]model.TokenRecord{},
+		RefreshSessions: map[string]model.RefreshSession{},
+		Sessions:        map[string]model.RunSession{},
+		Audit:           make([]model.AuditEvent, 0, 64),
 	}
 	if err := s.load(); err != nil {
 		return nil, err
@@ -84,6 +89,9 @@ func (s *Store) load() error {
 	}
 	if st.Tokens == nil {
 		st.Tokens = map[string]model.TokenRecord{}
+	}
+	if st.RefreshSessions == nil {
+		st.RefreshSessions = map[string]model.RefreshSession{}
 	}
 	if st.Sessions == nil {
 		st.Sessions = map[string]model.RunSession{}
@@ -248,6 +256,11 @@ func (s *Store) RemoveAgent(id string) error {
 	for jti, tok := range s.state.Tokens {
 		if tok.AgentID == id {
 			delete(s.state.Tokens, jti)
+		}
+	}
+	for sessionID, session := range s.state.RefreshSessions {
+		if session.AgentID == id {
+			delete(s.state.RefreshSessions, sessionID)
 		}
 	}
 	for sessID, sess := range s.state.Sessions {
@@ -583,6 +596,112 @@ func (s *Store) RevokeToken(jti, reason string, now time.Time) (model.TokenRecor
 		return model.TokenRecord{}, err
 	}
 	return t, nil
+}
+
+func hashRefreshToken(token string) string {
+	sum := sha256.Sum256([]byte(strings.TrimSpace(token)))
+	return hex.EncodeToString(sum[:])
+}
+
+func subtleConstantTimeEqual(a, b string) bool {
+	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
+}
+
+func (s *Store) PutRefreshSession(sess model.RefreshSession) error {
+	if strings.TrimSpace(sess.ID) == "" || strings.TrimSpace(sess.AgentID) == "" {
+		return ErrInvalid
+	}
+	if strings.TrimSpace(sess.RefreshTokenHash) == "" {
+		return ErrInvalid
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if _, exists := s.state.RefreshSessions[sess.ID]; exists {
+		return ErrConflict
+	}
+	s.state.RefreshSessions[sess.ID] = sess
+	return s.persistLocked()
+}
+
+func (s *Store) GetRefreshSession(id string) (model.RefreshSession, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	sess, ok := s.state.RefreshSessions[strings.TrimSpace(id)]
+	if !ok {
+		return model.RefreshSession{}, ErrNotFound
+	}
+	return sess, nil
+}
+
+func (s *Store) GetRefreshSessionByToken(token string) (model.RefreshSession, error) {
+	if strings.TrimSpace(token) == "" {
+		return model.RefreshSession{}, ErrInvalid
+	}
+	hash := hashRefreshToken(token)
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	for _, sess := range s.state.RefreshSessions {
+		if subtleConstantTimeEqual(sess.RefreshTokenHash, hash) {
+			return sess, nil
+		}
+	}
+	return model.RefreshSession{}, ErrNotFound
+}
+
+func (s *Store) RotateRefreshSessionToken(id, nextToken string, now time.Time) (model.RefreshSession, error) {
+	if strings.TrimSpace(nextToken) == "" {
+		return model.RefreshSession{}, ErrInvalid
+	}
+	now = now.UTC()
+	nextHash := hashRefreshToken(nextToken)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	sess, ok := s.state.RefreshSessions[strings.TrimSpace(id)]
+	if !ok {
+		return model.RefreshSession{}, ErrNotFound
+	}
+	sess.RefreshTokenHash = nextHash
+	sess.UpdatedAt = now
+	s.state.RefreshSessions[sess.ID] = sess
+	if err := s.persistLocked(); err != nil {
+		return model.RefreshSession{}, err
+	}
+	return sess, nil
+}
+
+func (s *Store) RevokeRefreshSession(id string, now time.Time) (model.RefreshSession, error) {
+	now = now.UTC()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	sess, ok := s.state.RefreshSessions[strings.TrimSpace(id)]
+	if !ok {
+		return model.RefreshSession{}, ErrNotFound
+	}
+	if sess.RevokedAt.IsZero() {
+		sess.RevokedAt = now
+		sess.UpdatedAt = now
+	}
+	s.state.RefreshSessions[sess.ID] = sess
+	if err := s.persistLocked(); err != nil {
+		return model.RefreshSession{}, err
+	}
+	return sess, nil
+}
+
+func (s *Store) RevokeRefreshSessionByToken(token string, now time.Time) (model.RefreshSession, error) {
+	if strings.TrimSpace(token) == "" {
+		return model.RefreshSession{}, ErrInvalid
+	}
+	sess, err := s.GetRefreshSessionByToken(token)
+	if err != nil {
+		return model.RefreshSession{}, err
+	}
+	return s.RevokeRefreshSession(sess.ID, now)
 }
 
 func (s *Store) PutSession(sess model.RunSession) error {
