@@ -60,7 +60,7 @@ FORT="docker exec $CONTAINER_NAME /usr/local/bin/fort --host http://127.0.0.1:80
 echo "[smoke] bootstrap admin + workload"
 $FORT --bootstrap-key smoke-bootstrap-key agent create --id admin --type user >/dev/null
 $FORT --bootstrap-key smoke-bootstrap-key agent policy set --id admin --bind '*:*:*' >/dev/null
-ADMIN_TOKEN="$($FORT --json --bootstrap-key smoke-bootstrap-key auth issue --agent admin | sed -n 's/.*"token": "\(.*\)".*/\1/p' | head -n1)"
+ADMIN_TOKEN="$($FORT --bootstrap-key smoke-bootstrap-key auth issue --agent admin | tr -d '\r\n')"
 if [[ -z "${ADMIN_TOKEN}" ]]; then
   echo "failed to mint admin token" >&2
   exit 1
@@ -69,8 +69,8 @@ $FORT --token "$ADMIN_TOKEN" agent create --id workload-a --type workload >/dev/
 $FORT --token "$ADMIN_TOKEN" agent policy set --id workload-a --bind 'safe:prod:get,run,list,set' >/dev/null
 
 echo "[smoke] open refresh session"
-SESSION_JSON="$($FORT --json --token "$ADMIN_TOKEN" auth session open --agent workload-a --access-ttl 5m --refresh-ttl 30m)"
-REFRESH_TOKEN="$(echo "$SESSION_JSON" | sed -n 's/.*"refresh_token": "\(.*\)".*/\1/p' | head -n1)"
+SESSION_OUT="$($FORT --token "$ADMIN_TOKEN" auth session open --agent workload-a --access-ttl 5m --refresh-ttl 30m)"
+REFRESH_TOKEN="$(echo "$SESSION_OUT" | awk -F= '/^refresh_token=/{print $2; exit}')"
 if [[ -z "${REFRESH_TOKEN}" ]]; then
   echo "failed to parse refresh token from session open output" >&2
   exit 1
