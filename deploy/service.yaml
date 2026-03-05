@@ -19,6 +19,7 @@ service:
     FORT_JWT_SIGNING_KEY: "change-me"
     FORT_BOOTSTRAP_KEY: "change-me"
     FORT_TOKEN_TTL: "15m"
+    FORT_REFRESH_SESSION_TTL: "24h"
     FORT_RUN_TTL: "60s"
     FORT_SECRET_TTL: "120s"
   ports:

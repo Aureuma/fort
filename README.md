@@ -84,6 +84,7 @@ PROFILE_TOKEN=$(./.dist/fort --json --host http://127.0.0.1:8088 --token "$ADMIN
 fort doctor
 fort version
 fort auth issue|login|whoami|list|revoke
+fort auth session open|refresh|close
 fort get
 fort set
 fort list
@@ -94,6 +95,33 @@ fort agent policy get|set|add|remove|check
 ```
 
 `fort run` is the only public run command. It internally does `open -> materialize -> close` session calls.
+
+## Container auto-refresh flow
+
+`fort-agent` keeps short-lived access tokens fresh inside each container from a refresh capability.
+
+1. Open a refresh session for the workload identity.
+
+```bash
+SESSION_JSON=$(./.dist/fort --json --host http://127.0.0.1:8088 --token "$ADMIN_TOKEN" \
+  auth session open --agent codex-profile-a --access-ttl 10m --refresh-ttl 24h)
+```
+
+2. Start `fort-agent` in the container with only the refresh token.
+
+```bash
+FORT_REFRESH_TOKEN=$(echo "$SESSION_JSON" | awk -F'"' '/"refresh_token"/{print $4; exit}')
+docker run --rm \
+  --entrypoint /usr/local/bin/fort-agent \
+  -e FORT_HOST=http://host.docker.internal:18089 \
+  -e FORT_REFRESH_TOKEN="$FORT_REFRESH_TOKEN" \
+  -e FORT_TOKEN_PATH=/run/fort/access.token \
+  -v /tmp/fort-run:/run/fort \
+  aureuma/fort:latest \
+  --once
+```
+
+3. Application reads the token from the mounted token path and refreshes naturally as `fort-agent` rotates it.
 
 ## Deploy with SI Viva (single image)
 
@@ -109,6 +137,12 @@ docker build -t aureuma/fort:latest .
 viva deploy --file deploy/service.yaml
 ```
 
+For Traefik-file public routing (`fort.aureuma.com`) on a Viva host with shared Traefik:
+
+```bash
+viva deploy --file deploy/service.public.yaml
+```
+
 or via SI wrapper (if available in your SI checkout):
 
 ```bash
@@ -119,4 +153,5 @@ si viva --repo /home/shawn/Development/viva --build deploy --file ./deploy/servi
 
 ```bash
 go test ./...
+./scripts/smoke-container.sh
 ```

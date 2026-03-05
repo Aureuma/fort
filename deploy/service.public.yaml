@@ -1,0 +1,39 @@
+kind: service
+meta:
+  name: fort-api
+  labels:
+    app_code: fort
+router:
+  mode: traefik-file
+  domain: fort.aureuma.com
+  entrypoints:
+    - websecure
+  tls: true
+  traefik_file:
+    directory: /etc/traefik/dynamic
+    service_port: 8088
+    router_name_prefix: fort
+service:
+  deploy_mode: inplace
+  keep_previous: false
+  build:
+    context: /home/shawn/Development/fort
+    dockerfile: /home/shawn/Development/fort/Dockerfile
+  command:
+    - /usr/local/bin/fortd
+  env:
+    FORT_ADDR: ":8088"
+    FORT_STATE_PATH: "/var/lib/fort/state.json"
+    FORT_JWT_SIGNING_KEY: "change-me"
+    FORT_BOOTSTRAP_KEY: "change-me"
+    FORT_TOKEN_TTL: "15m"
+    FORT_REFRESH_SESSION_TTL: "24h"
+    FORT_RUN_TTL: "60s"
+    FORT_SECRET_TTL: "120s"
+  networks:
+    - viva-shared
+    - si
+  volumes:
+    - "/var/lib/fort:/var/lib/fort"
+  health:
+    kind: none
