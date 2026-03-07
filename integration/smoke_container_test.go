@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -64,14 +65,18 @@ func TestFortSmokeContainer(t *testing.T) {
 		return cmd.Run()
 	}, "fort smoke container ready")
 
-	containerFort := func(args ...string) string {
-		cmdArgs := append([]string{"exec", containerName, "/usr/local/bin/fort", "--host", "http://127.0.0.1:8088"}, args...)
+	containerFort := func(token string, args ...string) string {
+		cmdArgs := []string{"exec", containerName, "/usr/local/bin/fort", "--host", "http://127.0.0.1:8088"}
+		if strings.TrimSpace(token) != "" {
+			cmdArgs = append(cmdArgs, "--token", token)
+		}
+		cmdArgs = append(cmdArgs, args...)
 		return runCmd(t, "", nil, "docker", cmdArgs...)
 	}
-	containerFort("agent", "create", "--id", "workload-a", "--type", "workload")
-	containerFort("agent", "policy", "set", "--id", "workload-a", "--bind", "safe:prod:get,run,list,set")
+	containerFort(adminToken, "agent", "create", "--id", "workload-a", "--type", "workload")
+	containerFort(adminToken, "agent", "policy", "set", "--id", "workload-a", "--bind", "safe:prod:get,run,list,set")
 	refreshFileInContainer := "/var/lib/fort/workload-a.refresh.token"
-	containerFort("auth", "session", "open", "--agent", "workload-a", "--access-ttl", "5m", "--refresh-ttl", "30m", "--refresh-token-out", refreshFileInContainer)
+	containerFort(adminToken, "auth", "session", "open", "--agent", "workload-a", "--access-ttl", "5m", "--refresh-ttl", "30m", "--refresh-token-out", refreshFileInContainer)
 	refreshFileOnHost := filepath.Join(stateDir, "workload-a.refresh.token")
 	info, err := os.Stat(refreshFileOnHost)
 	if err != nil {
