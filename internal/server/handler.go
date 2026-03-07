@@ -17,31 +17,36 @@ import (
 	"fort/internal/config"
 	"fort/internal/model"
 	"fort/internal/store"
-)
-
-const (
-	bootstrapHeader = "X-Fort-Bootstrap-Key"
+	"fort/internal/vaultbridge"
 )
 
 type actorContext struct {
-	AgentID     string
-	TokenJTI    string
-	IsBootstrap bool
+	AgentID  string
+	TokenJTI string
+}
+
+type secretBackend interface {
+	Get(repo, env, key string) (string, error)
+	BatchGet(repo, env string, keys []string) (map[string]string, error)
+	List(repo, env, prefix string) ([]string, error)
+	Set(repo, env, key, value string) error
 }
 
 type handler struct {
-	cfg  config.Config
-	st   *store.Store
-	auth *auth.Manager
-	mux  *http.ServeMux
-	now  func() time.Time
+	cfg   config.Config
+	st    *store.Store
+	vault secretBackend
+	auth  *auth.Manager
+	mux   *http.ServeMux
+	now   func() time.Time
 }
 
-func newHandler(cfg config.Config, st *store.Store) http.Handler {
+func newHandler(cfg config.Config, st *store.Store, vault secretBackend) http.Handler {
 	h := &handler{
-		cfg:  cfg,
-		st:   st,
-		auth: &auth.Manager{SigningKey: []byte(cfg.SigningKey), Store: st},
+		cfg:   cfg,
+		st:    st,
+		vault: vault,
+		auth:  &auth.Manager{SigningKey: []byte(cfg.SigningKey), Store: st},
 		now: func() time.Time {
 			return time.Now().UTC()
 		},
@@ -110,19 +115,7 @@ func (h *handler) requireActor(w http.ResponseWriter, r *http.Request) (actorCon
 	return actorContext{AgentID: claims.AgentID, TokenJTI: claims.ID}, true
 }
 
-func (h *handler) hasValidBootstrapKey(r *http.Request) bool {
-	provided := strings.TrimSpace(r.Header.Get(bootstrapHeader))
-	expected := strings.TrimSpace(h.cfg.BootstrapKey)
-	if provided == "" || expected == "" {
-		return false
-	}
-	return subtle.ConstantTimeCompare([]byte(provided), []byte(expected)) == 1
-}
-
 func (h *handler) requireAdmin(w http.ResponseWriter, r *http.Request) (actorContext, bool) {
-	if h.hasValidBootstrapKey(r) {
-		return actorContext{IsBootstrap: true}, true
-	}
 	actor, ok := h.requireActor(w, r)
 	if !ok {
 		return actorContext{}, false
@@ -516,11 +509,15 @@ func (h *handler) handleSecretGet(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "forbidden")
 		return
 	}
-	value, err := h.st.GetSecret(repo, env, key)
+	value, err := h.vault.Get(repo, env, key)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
+		if errors.Is(err, vaultbridge.ErrNotFound) {
 			h.addAudit(actor.AgentID, "secret_get", repo, env, key, "deny", "key_not_found")
 			writeError(w, http.StatusNotFound, "secret not found")
+			return
+		}
+		if errors.Is(err, vaultbridge.ErrInvalid) {
+			writeError(w, http.StatusBadRequest, "invalid secret target")
 			return
 		}
 		writeError(w, http.StatusInternalServerError, "failed to get secret")
@@ -560,11 +557,15 @@ func (h *handler) handleSecretBatchGet(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "forbidden")
 		return
 	}
-	values, err := h.st.BatchGet(repo, env, keys)
+	values, err := h.vault.BatchGet(repo, env, keys)
 	if err != nil {
-		if errors.Is(err, store.ErrNotFound) {
+		if errors.Is(err, vaultbridge.ErrNotFound) {
 			h.addAudit(actor.AgentID, "secret_batch_get", repo, env, "", "deny", "key_not_found")
 			writeError(w, http.StatusNotFound, "one or more secrets not found")
+			return
+		}
+		if errors.Is(err, vaultbridge.ErrInvalid) {
+			writeError(w, http.StatusBadRequest, "invalid secret target")
 			return
 		}
 		writeError(w, http.StatusInternalServerError, "failed to batch get")
@@ -603,7 +604,15 @@ func (h *handler) handleSecretList(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "forbidden")
 		return
 	}
-	keys := h.st.ListSecretKeys(repo, env, prefix)
+	keys, err := h.vault.List(repo, env, prefix)
+	if err != nil {
+		if errors.Is(err, vaultbridge.ErrInvalid) {
+			writeError(w, http.StatusBadRequest, "invalid secret target")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to list")
+		return
+	}
 	h.addAudit(actor.AgentID, "secret_list", repo, env, "", "allow", "")
 	writeJSON(w, http.StatusOK, map[string]any{"keys": keys})
 }
@@ -634,7 +643,11 @@ func (h *handler) handleSecretSet(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusForbidden, "forbidden")
 		return
 	}
-	if err := h.st.SetSecret(repo, env, key, req.Value); err != nil {
+	if err := h.vault.Set(repo, env, key, req.Value); err != nil {
+		if errors.Is(err, vaultbridge.ErrInvalid) {
+			writeError(w, http.StatusBadRequest, "invalid secret target")
+			return
+		}
 		writeError(w, http.StatusInternalServerError, "set failed")
 		return
 	}
@@ -754,7 +767,7 @@ func (h *handler) handleRunSessionMaterialize(w http.ResponseWriter, r *http.Req
 		writeError(w, http.StatusInternalServerError, "mark used failed")
 		return
 	}
-	values, err := h.st.BatchGet(sess.Repo, sess.Env, sess.Keys)
+	values, err := h.vault.BatchGet(sess.Repo, sess.Env, sess.Keys)
 	if err != nil {
 		writeError(w, http.StatusNotFound, "one or more secrets not found")
 		return
@@ -848,7 +861,7 @@ func (h *handler) handleAgentGet(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if actor.AgentID != id && !h.hasValidBootstrapKey(r) && !h.isAdminAgent(actor.AgentID) {
+	if actor.AgentID != id && !h.isAdminAgent(actor.AgentID) {
 		writeError(w, http.StatusForbidden, "forbidden")
 		return
 	}
@@ -864,7 +877,7 @@ func (h *handler) handleAgentRotate(w http.ResponseWriter, r *http.Request) {
 	if _, ok := h.requireAdmin(w, r); !ok {
 		return
 	}
-	agent, err := h.st.RotateAgent(strings.TrimSpace(r.PathValue("id")), h.now())
+	agent, revokedTokens, revokedSessions, err := h.st.RotateAgentCredentials(strings.TrimSpace(r.PathValue("id")), h.now())
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "agent not found")
@@ -873,7 +886,13 @@ func (h *handler) handleAgentRotate(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "rotate failed")
 		return
 	}
-	writeJSON(w, http.StatusOK, agent)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"agent":                  agent,
+		"revoked_token_count":    revokedTokens,
+		"revoked_session_count":  revokedSessions,
+		"credential_version":     agent.CredentialVersion,
+		"credentials_rotated_at": agent.UpdatedAt,
+	})
 }
 
 func (h *handler) handleAgentDisable(w http.ResponseWriter, r *http.Request) {

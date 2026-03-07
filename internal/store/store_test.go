@@ -200,3 +200,64 @@ func TestRefreshSessionLookupRotateAndRevoke(t *testing.T) {
 		t.Fatalf("expected revoked timestamp")
 	}
 }
+
+func TestRotateAgentCredentialsRevokesTokenAndRefreshSessions(t *testing.T) {
+	st := newTestStore(t)
+	now := time.Now().UTC()
+	if _, err := st.CreateAgent("a1", model.AgentTypeWorkload, model.AgentStatusActive, now); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	if err := st.PutToken(model.TokenRecord{
+		JTI:       "t1",
+		AgentID:   "a1",
+		Audience:  "fort-api",
+		IssuedAt:  now,
+		ExpiresAt: now.Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("put token: %v", err)
+	}
+	if err := st.PutRefreshSession(model.RefreshSession{
+		ID:               "rs1",
+		AgentID:          "a1",
+		Audience:         "fort-api",
+		AccessTTLSeconds: 600,
+		RefreshTokenHash: hashRefreshToken("refresh-1"),
+		RefreshExpiresAt: now.Add(time.Hour),
+		CreatedAt:        now,
+		UpdatedAt:        now,
+	}); err != nil {
+		t.Fatalf("put refresh session: %v", err)
+	}
+
+	agent, revokedTokens, revokedSessions, err := st.RotateAgentCredentials("a1", now.Add(time.Minute))
+	if err != nil {
+		t.Fatalf("rotate agent credentials: %v", err)
+	}
+	if agent.CredentialVersion != 2 {
+		t.Fatalf("expected credential version=2, got %d", agent.CredentialVersion)
+	}
+	if revokedTokens != 1 {
+		t.Fatalf("expected revoked token count=1, got %d", revokedTokens)
+	}
+	if revokedSessions != 1 {
+		t.Fatalf("expected revoked session count=1, got %d", revokedSessions)
+	}
+
+	tok, err := st.GetToken("t1")
+	if err != nil {
+		t.Fatalf("get token: %v", err)
+	}
+	if tok.RevokedAt.IsZero() {
+		t.Fatalf("expected token to be revoked")
+	}
+	if tok.Reason != "agent_credentials_rotated" {
+		t.Fatalf("unexpected token revoke reason=%q", tok.Reason)
+	}
+	session, err := st.GetRefreshSession("rs1")
+	if err != nil {
+		t.Fatalf("get refresh session: %v", err)
+	}
+	if session.RevokedAt.IsZero() {
+		t.Fatalf("expected refresh session revoked")
+	}
+}

@@ -18,8 +18,9 @@ import (
 var ErrUnauthorized = errors.New("unauthorized")
 
 type Claims struct {
-	AgentID string `json:"agent_id"`
-	Type    string `json:"type"`
+	AgentID           string `json:"agent_id"`
+	Type              string `json:"type"`
+	CredentialVersion int64  `json:"credential_version"`
 	jwt.RegisteredClaims
 }
 
@@ -89,8 +90,9 @@ func (m *Manager) Issue(agent model.Agent, ttl time.Duration, audience string) (
 		return "", model.TokenRecord{}, err
 	}
 	claims := Claims{
-		AgentID: agent.ID,
-		Type:    string(agent.Type),
+		AgentID:           agent.ID,
+		Type:              string(agent.Type),
+		CredentialVersion: agent.CredentialVersion,
 		RegisteredClaims: jwt.RegisteredClaims{
 			ID:        jti,
 			Issuer:    m.issuer(),
@@ -177,6 +179,9 @@ func (m *Manager) Parse(token string) (Claims, error) {
 	if claims.ID == "" || claims.AgentID == "" {
 		return Claims{}, ErrUnauthorized
 	}
+	if claims.CredentialVersion <= 0 {
+		return Claims{}, ErrUnauthorized
+	}
 	if claims.Subject == "" || claims.Subject != claims.AgentID {
 		return Claims{}, ErrUnauthorized
 	}
@@ -204,6 +209,13 @@ func (m *Manager) Parse(token string) (Claims, error) {
 	}
 	now := m.now()
 	if !rec.RevokedAt.IsZero() || now.After(rec.ExpiresAt) {
+		return Claims{}, ErrUnauthorized
+	}
+	agent, err := m.Store.GetAgent(claims.AgentID)
+	if err != nil || agent.Status != model.AgentStatusActive {
+		return Claims{}, ErrUnauthorized
+	}
+	if claims.CredentialVersion != agent.CredentialVersion {
 		return Claims{}, ErrUnauthorized
 	}
 	return *claims, nil

@@ -24,13 +24,12 @@ var (
 )
 
 type persistentState struct {
-	Agents          map[string]model.Agent                  `json:"agents"`
-	Policies        map[string]model.Policy                 `json:"policies"`
-	Secrets         map[string]map[string]map[string]string `json:"secrets"`
-	Tokens          map[string]model.TokenRecord            `json:"tokens"`
-	RefreshSessions map[string]model.RefreshSession         `json:"refresh_sessions"`
-	Sessions        map[string]model.RunSession             `json:"sessions"`
-	Audit           []model.AuditEvent                      `json:"audit"`
+	Agents          map[string]model.Agent          `json:"agents"`
+	Policies        map[string]model.Policy         `json:"policies"`
+	Tokens          map[string]model.TokenRecord    `json:"tokens"`
+	RefreshSessions map[string]model.RefreshSession `json:"refresh_sessions"`
+	Sessions        map[string]model.RunSession     `json:"sessions"`
+	Audit           []model.AuditEvent              `json:"audit"`
 }
 
 type Store struct {
@@ -44,7 +43,6 @@ func New(path string) (*Store, error) {
 	s.state = persistentState{
 		Agents:          map[string]model.Agent{},
 		Policies:        map[string]model.Policy{},
-		Secrets:         map[string]map[string]map[string]string{},
 		Tokens:          map[string]model.TokenRecord{},
 		RefreshSessions: map[string]model.RefreshSession{},
 		Sessions:        map[string]model.RunSession{},
@@ -83,9 +81,6 @@ func (s *Store) load() error {
 	}
 	if st.Policies == nil {
 		st.Policies = map[string]model.Policy{}
-	}
-	if st.Secrets == nil {
-		st.Secrets = map[string]map[string]map[string]string{}
 	}
 	if st.Tokens == nil {
 		st.Tokens = map[string]model.TokenRecord{}
@@ -242,6 +237,47 @@ func (s *Store) RotateAgent(id string, now time.Time) (model.Agent, error) {
 		return model.Agent{}, err
 	}
 	return a, nil
+}
+
+func (s *Store) RotateAgentCredentials(id string, now time.Time) (model.Agent, int, int, error) {
+	now = now.UTC()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	a, ok := s.state.Agents[id]
+	if !ok {
+		return model.Agent{}, 0, 0, ErrNotFound
+	}
+	a.CredentialVersion++
+	a.UpdatedAt = now
+	s.state.Agents[id] = a
+
+	revokedTokens := 0
+	for jti, tok := range s.state.Tokens {
+		if tok.AgentID != id || !tok.RevokedAt.IsZero() {
+			continue
+		}
+		tok.RevokedAt = now
+		tok.Reason = "agent_credentials_rotated"
+		s.state.Tokens[jti] = tok
+		revokedTokens++
+	}
+
+	revokedSessions := 0
+	for sessionID, sess := range s.state.RefreshSessions {
+		if sess.AgentID != id || !sess.RevokedAt.IsZero() {
+			continue
+		}
+		sess.RevokedAt = now
+		sess.UpdatedAt = now
+		s.state.RefreshSessions[sessionID] = sess
+		revokedSessions++
+	}
+
+	if err := s.persistLocked(); err != nil {
+		return model.Agent{}, 0, 0, err
+	}
+	return a, revokedTokens, revokedSessions, nil
 }
 
 func (s *Store) RemoveAgent(id string) error {
@@ -448,88 +484,6 @@ func (s *Store) CheckPermission(agentID, repo, env string, op model.Operation) (
 		}
 	}
 	return false, "no_matching_binding"
-}
-
-func (s *Store) SetSecret(repo, env, key, value string) error {
-	repo = strings.TrimSpace(repo)
-	env = strings.TrimSpace(env)
-	key = strings.TrimSpace(key)
-	if repo == "" || env == "" || key == "" {
-		return ErrInvalid
-	}
-
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	if _, ok := s.state.Secrets[repo]; !ok {
-		s.state.Secrets[repo] = map[string]map[string]string{}
-	}
-	if _, ok := s.state.Secrets[repo][env]; !ok {
-		s.state.Secrets[repo][env] = map[string]string{}
-	}
-	s.state.Secrets[repo][env][key] = value
-	return s.persistLocked()
-}
-
-func (s *Store) GetSecret(repo, env, key string) (string, error) {
-	repo = strings.TrimSpace(repo)
-	env = strings.TrimSpace(env)
-	key = strings.TrimSpace(key)
-	if repo == "" || env == "" || key == "" {
-		return "", ErrInvalid
-	}
-
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	envMap, ok := s.state.Secrets[repo]
-	if !ok {
-		return "", ErrNotFound
-	}
-	keys, ok := envMap[env]
-	if !ok {
-		return "", ErrNotFound
-	}
-	v, ok := keys[key]
-	if !ok {
-		return "", ErrNotFound
-	}
-	return v, nil
-}
-
-func (s *Store) BatchGet(repo, env string, keys []string) (map[string]string, error) {
-	out := make(map[string]string, len(keys))
-	for _, key := range keys {
-		v, err := s.GetSecret(repo, env, key)
-		if err != nil {
-			return nil, err
-		}
-		out[strings.TrimSpace(key)] = v
-	}
-	return out, nil
-}
-
-func (s *Store) ListSecretKeys(repo, env, prefix string) []string {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	envMap, ok := s.state.Secrets[repo]
-	if !ok {
-		return []string{}
-	}
-	keyMap, ok := envMap[env]
-	if !ok {
-		return []string{}
-	}
-	out := make([]string, 0, len(keyMap))
-	for key := range keyMap {
-		if prefix != "" && !strings.HasPrefix(key, prefix) {
-			continue
-		}
-		out = append(out, key)
-	}
-	sort.Strings(out)
-	return out
 }
 
 func (s *Store) PutToken(rec model.TokenRecord) error {

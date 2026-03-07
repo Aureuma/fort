@@ -72,6 +72,22 @@ func TestParseExpired(t *testing.T) {
 	}
 }
 
+func TestParseRejectsStaleCredentialVersionAfterRotate(t *testing.T) {
+	now := time.Date(2026, 3, 4, 12, 0, 0, 0, time.UTC)
+	mgr, st, agent := newAuthManager(t, now)
+
+	token, _, err := mgr.Issue(agent, 15*time.Minute, "fort-api")
+	if err != nil {
+		t.Fatalf("issue: %v", err)
+	}
+	if _, err := st.RotateAgent(agent.ID, now.Add(time.Second)); err != nil {
+		t.Fatalf("rotate agent: %v", err)
+	}
+	if _, err := mgr.Parse(token); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("expected unauthorized for stale credential version, got %v", err)
+	}
+}
+
 func TestRefreshSessionLifecycle(t *testing.T) {
 	now := time.Date(2026, 3, 4, 12, 0, 0, 0, time.UTC)
 	mgr, _, agent := newAuthManager(t, now)
