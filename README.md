@@ -2,6 +2,8 @@
 
 `fort` is the SI policy/authentication API for SI Vault operations.
 
+See also: `docs/GUIDING_PRINCIPLES.md`
+
 ## Components
 - `fortd`: HTTP API server
 - `fort`: CLI client
@@ -18,6 +20,14 @@ Fort does:
 Fort does not:
 - store secret key/value material in Fort state
 - expose bootstrap/admin bypass keys
+- depend on Sun for SI Vault secret operations
+
+## Guiding Principles
+- Fort is an authz/authn wrapper over SI Vault, not a second vault.
+- All secret reads/writes resolve against SI Vault-backed `safe` `.env` material.
+- Workloads authenticate with short-lived access tokens and rotating refresh sessions.
+- Refresh and signing secrets are file-backed and strict-permissioned (`0600`), never env-injected secret values.
+- Provisioning is explicit and authenticated; there is no hidden bootstrap bypass path.
 
 ## Auth & Session Security
 - Access tokens are short-lived JWT bearer tokens.
@@ -72,6 +82,7 @@ fort agent policy get|set|add|remove|check
   - `fort auth session refresh --refresh-token-file <path> [--refresh-token-out <path>]`
   - `fort-agent --refresh-token-file <path> --token-path <path>`
 - Refresh token files must be regular files with `0600` (or stricter) permissions.
+- `fort-agent` enforces regular-file checks and strict permission checks on refresh-token files.
 
 ## Deploy with Viva
 ```bash
@@ -90,3 +101,8 @@ go test -tags=integration ./integration -run TestFortE2ESIVault
 ./scripts/smoke-container.sh
 ./scripts/e2e-si-vault.sh
 ```
+
+Integration coverage includes:
+- container smoke for `fortd` + `fort-agent` token refresh flow
+- SI↔Fort↔Vault end-to-end parity checks
+- Fort get/set parity with manual SI Vault decrypt verification

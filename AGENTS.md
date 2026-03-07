@@ -3,51 +3,58 @@
 ## Purpose
 Fort is the policy and authentication API boundary for SI Vault operations.
 
-Fort must stay a thin layer:
-- authenticate agent requests using bearer tokens
-- authorize requests with agent policy (repo/env/op bindings)
-- forward secret operations to SI Vault-backed storage (`safe` repo `.env` files)
+Fort stays intentionally thin:
+- authenticate agent requests with bearer access tokens
+- authorize by policy bindings (`repo/env/op`)
+- route secret operations to SI Vault-backed material in `safe`
 
 ## Hard Boundaries
 Fort must not:
-- keep secret key/value material in its own state database
-- expose bootstrap/admin bypass keys or unauthenticated setup paths
-- store long-lived secret values in memory outside request scope
+- persist secret key/value material in Fort state
+- expose unauthenticated setup/bootstrap bypass paths
+- hold long-lived secret plaintext in process memory outside request scope
+- couple SI Vault secret flows to Sun
 
 Fort state is limited to:
 - agents
 - policies
-- token/session records
+- token and refresh-session records
 - audit events
 
-## Security Model
+## Security Principles
 - Every sensitive endpoint is bearer-token authenticated.
-- Admin operations require an agent whose policy grants wildcard admin capability (`*:*:*`).
-- Workload access is policy-scoped by `repo`, `env`, and operation (`get`, `set`, `list`, `batch-get`, `run`).
-- Session refresh uses rotating refresh tokens only; no alternate bypass path.
-- Refresh-token reuse detection is mandatory: reuse revokes the session as compromised.
-- Access-token validation must enforce JWT registered claims and issuer/audience/subject consistency.
-- Agent credential rotation must invalidate previous credentials and sessions.
-- Refresh tokens and signing keys must be file-backed secrets, never env-injected secret values.
+- Admin operations require wildcard admin policy (`*:*:*`) on the calling agent.
+- Workload access is policy-scoped by `repo`, `env`, and operation.
+- Access tokens are short-lived JWTs with strict claim validation (`iss/sub/aud/jti/iat/nbf/exp`).
+- Refresh sessions use rotating opaque refresh tokens with reuse detection and compromise revocation.
+- Agent credential rotation invalidates prior access tokens and refresh sessions.
+- Refresh tokens and JWT signing keys are file-backed secrets only (`0600`), never env-injected secret values.
+
+## Provisioning and Bootstrap
+- There is no production seeding/bootstrap shortcut.
+- Operational provisioning is explicit and authenticated:
+  - create/enable agent
+  - apply policy bindings
+  - open refresh session for workload runtime
+- Test fixtures may initialize isolated local state for integration tests only.
 
 ## Data Plane Contract
-- Secret `get/set/list/batch-get/run` operations operate on SI Vault material in the `safe` repository.
-- SI Vault ciphertext format (`encrypted:si-vault:`) is preserved.
-- Per `repo/env` key material is sourced from the configured vault keyring file.
+- `get/set/list/batch-get/run` operate against SI Vault ciphertext in `safe` (`encrypted:si-vault:`).
+- Fort does not maintain an independent secret store.
+- Per `repo/env` cryptographic material is resolved from the configured SI Vault keyring.
 
 ## Deployment Contract
-- Fort is deployed as a public API service through Viva routing.
-- Runtime must mount:
-  - Fort state directory (`FORT_STATE_PATH`)
-  - safe repo root (`FORT_SAFE_ROOT`)
-  - SI Vault keyring (`FORT_VAULT_KEYRING_FILE`)
-  - JWT signing key file (`FORT_JWT_SIGNING_KEY_FILE`)
-  - refresh token file(s) for workload-side `fort-agent` runtime
+- Fort is publicly routed through Viva.
+- Runtime mounts must include:
+  - `FORT_STATE_PATH`
+  - `FORT_SAFE_ROOT`
+  - `FORT_VAULT_KEYRING_FILE`
+  - `FORT_JWT_SIGNING_KEY_FILE`
+  - workload refresh-token file paths used by `fort-agent`
 
-## Change Discipline
-Any change that introduces:
-- bootstrap bypass auth,
-- Fort-owned secret persistence,
-- env-injected refresh/JWT signing secrets,
-- or Sun coupling in Vault flows,
-must be treated as a regression.
+## Regression Policy
+Treat the following as regressions:
+- auth bypass or hidden bootstrap path
+- Fort-owned secret persistence
+- env-injected refresh/JWT signing secrets
+- Sun coupling in SI Vault/Fort secret flow
