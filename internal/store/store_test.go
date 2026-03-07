@@ -261,3 +261,43 @@ func TestRotateAgentCredentialsRevokesTokenAndRefreshSessions(t *testing.T) {
 		t.Fatalf("expected refresh session revoked")
 	}
 }
+
+func TestGetRefreshSessionByAnyTokenDetectsRotatedTokenReuse(t *testing.T) {
+	st := newTestStore(t)
+	now := time.Now().UTC()
+	session := model.RefreshSession{
+		ID:               "rs1",
+		AgentID:          "agent-a",
+		Audience:         "fort-api",
+		AccessTTLSeconds: 300,
+		RefreshTokenHash: hashRefreshToken("refresh-1"),
+		RefreshExpiresAt: now.Add(time.Hour),
+		CreatedAt:        now,
+		UpdatedAt:        now,
+	}
+	if err := st.PutRefreshSession(session); err != nil {
+		t.Fatalf("put refresh session: %v", err)
+	}
+	if _, err := st.RotateRefreshSessionToken("rs1", "refresh-2", now.Add(time.Minute)); err != nil {
+		t.Fatalf("rotate refresh token: %v", err)
+	}
+
+	_, reused, err := st.GetRefreshSessionByAnyToken("refresh-2")
+	if err != nil {
+		t.Fatalf("lookup new token: %v", err)
+	}
+	if reused {
+		t.Fatalf("expected current token lookup to report reused=false")
+	}
+
+	sess, reused, err := st.GetRefreshSessionByAnyToken("refresh-1")
+	if err != nil {
+		t.Fatalf("lookup old token: %v", err)
+	}
+	if !reused {
+		t.Fatalf("expected old token lookup to report reuse candidate")
+	}
+	if sess.ID != "rs1" {
+		t.Fatalf("unexpected session id: %s", sess.ID)
+	}
+}

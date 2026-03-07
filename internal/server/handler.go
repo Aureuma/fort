@@ -356,13 +356,24 @@ func (h *handler) handleAuthSessionRefresh(w http.ResponseWriter, r *http.Reques
 	}
 	token, rec, session, refreshToken, err := h.auth.RefreshByToken(req.RefreshToken)
 	if err != nil {
+		if errors.Is(err, auth.ErrRefreshReuseDetected) {
+			agentID := ""
+			if sess, reused, lookupErr := h.st.GetRefreshSessionByAnyToken(req.RefreshToken); lookupErr == nil && reused {
+				agentID = sess.AgentID
+			}
+			h.addAudit(agentID, "auth_session_refresh", "", "", "", "deny", "refresh_token_reuse_detected")
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
 		if errors.Is(err, auth.ErrUnauthorized) {
+			h.addAudit("", "auth_session_refresh", "", "", "", "deny", "unauthorized")
 			writeError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
 		writeError(w, http.StatusInternalServerError, "refresh failed")
 		return
 	}
+	h.addAudit(rec.AgentID, "auth_session_refresh", "", "", "", "allow", "")
 	writeJSON(w, http.StatusOK, map[string]any{
 		"session_id":         session.ID,
 		"agent_id":           rec.AgentID,

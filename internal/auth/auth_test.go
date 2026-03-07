@@ -117,15 +117,41 @@ func TestRefreshSessionLifecycle(t *testing.T) {
 	if refreshToken2 == refreshToken {
 		t.Fatalf("expected rotated refresh token")
 	}
-	if _, _, _, _, err := mgr.RefreshByToken(refreshToken); !errors.Is(err, ErrUnauthorized) {
-		t.Fatalf("expected old refresh token to be unauthorized, got %v", err)
-	}
 
 	if _, err := mgr.CloseRefreshSessionByToken(refreshToken2); err != nil {
 		t.Fatalf("close by token: %v", err)
 	}
 	if _, _, _, _, err := mgr.RefreshByToken(refreshToken2); !errors.Is(err, ErrUnauthorized) {
 		t.Fatalf("expected unauthorized after close, got %v", err)
+	}
+}
+
+func TestRefreshSessionReuseDetectionRevokesSession(t *testing.T) {
+	now := time.Date(2026, 3, 4, 12, 0, 0, 0, time.UTC)
+	mgr, st, agent := newAuthManager(t, now)
+
+	_, _, session, refreshToken, err := mgr.OpenRefreshSession(agent, 2*time.Minute, time.Hour, "fort-api")
+	if err != nil {
+		t.Fatalf("open refresh session: %v", err)
+	}
+	mgr.Now = func() time.Time { return now.Add(30 * time.Second) }
+	_, _, _, refreshToken2, err := mgr.RefreshByToken(refreshToken)
+	if err != nil {
+		t.Fatalf("refresh by token: %v", err)
+	}
+
+	if _, _, _, _, err := mgr.RefreshByToken(refreshToken); !errors.Is(err, ErrRefreshReuseDetected) {
+		t.Fatalf("expected reuse detection error, got %v", err)
+	}
+	if _, _, _, _, err := mgr.RefreshByToken(refreshToken2); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("expected session revoked after reuse detection, got %v", err)
+	}
+	stored, err := st.GetRefreshSession(session.ID)
+	if err != nil {
+		t.Fatalf("get session: %v", err)
+	}
+	if stored.RevokedAt.IsZero() {
+		t.Fatalf("expected refresh session to be revoked after reuse detection")
 	}
 }
 

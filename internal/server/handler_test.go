@@ -315,6 +315,12 @@ func TestAuthSessionOpenRefreshAndClose(t *testing.T) {
 	if status != http.StatusUnauthorized {
 		t.Fatalf("expected unauthorized for old refresh token, got %d", status)
 	}
+	status, _ = doJSON(t, client, http.MethodPost, ts.URL+"/v1/auth/session/refresh", map[string]any{
+		"refresh_token": refreshToken2,
+	}, nil)
+	if status != http.StatusUnauthorized {
+		t.Fatalf("expected unauthorized for latest refresh token after old-token reuse, got %d", status)
+	}
 
 	status, body = doJSON(t, client, http.MethodPost, ts.URL+"/v1/auth/session/close", map[string]any{
 		"session_id": sessionID,

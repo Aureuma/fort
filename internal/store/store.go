@@ -605,6 +605,27 @@ func (s *Store) GetRefreshSessionByToken(token string) (model.RefreshSession, er
 	return model.RefreshSession{}, ErrNotFound
 }
 
+func (s *Store) GetRefreshSessionByAnyToken(token string) (model.RefreshSession, bool, error) {
+	if strings.TrimSpace(token) == "" {
+		return model.RefreshSession{}, false, ErrInvalid
+	}
+	hash := hashRefreshToken(token)
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	for _, sess := range s.state.RefreshSessions {
+		if subtleConstantTimeEqual(sess.RefreshTokenHash, hash) {
+			return sess, false, nil
+		}
+	}
+	for _, sess := range s.state.RefreshSessions {
+		if subtleConstantTimeEqual(sess.PreviousTokenHash, hash) {
+			return sess, true, nil
+		}
+	}
+	return model.RefreshSession{}, false, ErrNotFound
+}
+
 func (s *Store) RotateRefreshSessionToken(id, nextToken string, now time.Time) (model.RefreshSession, error) {
 	if strings.TrimSpace(nextToken) == "" {
 		return model.RefreshSession{}, ErrInvalid
@@ -618,6 +639,7 @@ func (s *Store) RotateRefreshSessionToken(id, nextToken string, now time.Time) (
 	if !ok {
 		return model.RefreshSession{}, ErrNotFound
 	}
+	sess.PreviousTokenHash = sess.RefreshTokenHash
 	sess.RefreshTokenHash = nextHash
 	sess.UpdatedAt = now
 	s.state.RefreshSessions[sess.ID] = sess

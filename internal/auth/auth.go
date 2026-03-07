@@ -16,6 +16,7 @@ import (
 )
 
 var ErrUnauthorized = errors.New("unauthorized")
+var ErrRefreshReuseDetected = errors.New("refresh token reuse detected")
 
 type Claims struct {
 	AgentID           string `json:"agent_id"`
@@ -222,11 +223,15 @@ func (m *Manager) Parse(token string) (Claims, error) {
 }
 
 func (m *Manager) RefreshByToken(refreshToken string) (string, model.TokenRecord, model.RefreshSession, string, error) {
-	sess, err := m.Store.GetRefreshSessionByToken(strings.TrimSpace(refreshToken))
+	sess, reusedPrevious, err := m.Store.GetRefreshSessionByAnyToken(strings.TrimSpace(refreshToken))
 	if err != nil {
 		return "", model.TokenRecord{}, model.RefreshSession{}, "", ErrUnauthorized
 	}
 	now := m.now()
+	if reusedPrevious {
+		_, _ = m.Store.RevokeRefreshSession(sess.ID, now)
+		return "", model.TokenRecord{}, model.RefreshSession{}, "", ErrRefreshReuseDetected
+	}
 	if !sess.RevokedAt.IsZero() || now.After(sess.RefreshExpiresAt) {
 		return "", model.TokenRecord{}, model.RefreshSession{}, "", ErrUnauthorized
 	}

@@ -81,6 +81,7 @@ type RefreshSession struct {
 	Audience         string    `json:"audience"`
 	AccessTTLSeconds int64     `json:"access_ttl_seconds"`
 	RefreshTokenHash string    `json:"refresh_token_hash"`
+	PreviousTokenHash string   `json:"previous_token_hash,omitempty"`
 	RefreshExpiresAt time.Time `json:"refresh_expires_at"`
 	CreatedAt        time.Time `json:"created_at"`
 	UpdatedAt        time.Time `json:"updated_at"`
