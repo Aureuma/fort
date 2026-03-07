@@ -8,10 +8,19 @@ import (
 
 	"fort/internal/config"
 	"fort/internal/store"
+	"fort/internal/vaultbridge"
 )
 
 func Run(cfg config.Config, st *store.Store) error {
-	h := newHandler(cfg, st)
+	backend, err := vaultbridge.New(vaultbridge.Config{
+		SafeRoot:      cfg.SafeRoot,
+		KeyringPath:   cfg.KeyringPath,
+		ExtraPrivKeys: cfg.ExtraPrivateKeys,
+	})
+	if err != nil {
+		return err
+	}
+	h := newHandler(cfg, st, backend)
 	srv := &http.Server{
 		Addr:              cfg.Addr,
 		Handler:           h,
