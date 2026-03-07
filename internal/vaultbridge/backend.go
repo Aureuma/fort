@@ -117,7 +117,7 @@ func (b *Backend) envFilePath(repo, env string) string {
 }
 
 func loadDotenv(path string, failIfMissing bool) (map[string]string, error) {
-	raw, err := os.ReadFile(path)
+	info, err := os.Stat(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			if failIfMissing {
@@ -125,6 +125,16 @@ func loadDotenv(path string, failIfMissing bool) (map[string]string, error) {
 			}
 			return map[string]string{}, nil
 		}
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, fmt.Errorf("secret file path must be a regular file")
+	}
+	if info.Mode().Perm()&0o077 != 0 {
+		return nil, fmt.Errorf("secret file permissions must be 0600 or stricter")
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
 		return nil, err
 	}
 	lines := strings.Split(string(raw), "\n")

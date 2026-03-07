@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 )
@@ -108,5 +109,35 @@ func TestWriteDotenvPreservesOwnerAndMode(t *testing.T) {
 	}
 	if got := afterInfo.Mode().Perm(); got != 0o600 {
 		t.Fatalf("unexpected mode: got %o want 600", got)
+	}
+}
+
+func TestListRejectsBroadEnvFilePermissions(t *testing.T) {
+	tmp := t.TempDir()
+	safeRoot := filepath.Join(tmp, "safe-root")
+	repoDir := filepath.Join(safeRoot, "safe")
+	if err := os.MkdirAll(repoDir, 0o755); err != nil {
+		t.Fatalf("mkdir repo dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, ".env.dev"), []byte("FOO=bar\n"), 0o644); err != nil {
+		t.Fatalf("write env file: %v", err)
+	}
+	keyring := filepath.Join(tmp, "keyring.json")
+	writeKeyring(t, keyring, map[string]any{
+		"safe/dev": map[string]any{
+			"repo": "safe",
+			"env":  "dev",
+		},
+	})
+	backend, err := New(Config{
+		SafeRoot:    safeRoot,
+		KeyringPath: keyring,
+	})
+	if err != nil {
+		t.Fatalf("new backend: %v", err)
+	}
+	_, err = backend.List("safe", "dev", "")
+	if err == nil || !strings.Contains(err.Error(), "0600") {
+		t.Fatalf("expected strict permission error, got %v", err)
 	}
 }
