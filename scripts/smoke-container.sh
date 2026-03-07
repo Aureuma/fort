@@ -52,9 +52,10 @@ func main() {
 	stateDir := os.Getenv("STATE_DIR")
 	repo := "safe"
 	env := "prod"
-	signingKey := "smoke-signing-key"
+	signingKey := "smoke-signing-key-0123456789012345"
 	statePath := filepath.Join(stateDir, "state.json")
 	keyringPath := filepath.Join(stateDir, "si-vault-keyring.json")
+	signingKeyPath := filepath.Join(stateDir, "jwt-signing.key")
 
 	st, err := store.New(statePath)
 	if err != nil {
@@ -95,6 +96,9 @@ func main() {
 	if err := os.WriteFile(keyringPath, raw, 0o600); err != nil {
 		panic(err)
 	}
+	if err := os.WriteFile(signingKeyPath, []byte(signingKey), 0o600); err != nil {
+		panic(err)
+	}
 	fmt.Print(token)
 }
 EOF
@@ -112,7 +116,7 @@ docker run -d --rm \
   --network "$NETWORK_NAME" \
   -e FORT_ADDR=":8088" \
   -e FORT_STATE_PATH="/var/lib/fort/state.json" \
-  -e FORT_JWT_SIGNING_KEY="smoke-signing-key" \
+  -e FORT_JWT_SIGNING_KEY_FILE="/var/lib/fort/jwt-signing.key" \
   -e FORT_SAFE_ROOT="/safe" \
   -e FORT_VAULT_KEYRING_FILE="/var/lib/fort/si-vault-keyring.json" \
   -e FORT_TOKEN_TTL="15m" \
@@ -156,7 +160,7 @@ WHOAMI_JSON="$(docker run --rm \
   -v "$REFRESH_FILE_ON_HOST:/run/secrets/fort.refresh:ro" \
   -e FORT_HOST="http://$CONTAINER_NAME:8088" \
   "$IMAGE_TAG" \
-  -lc 'mkdir -p /tmp/fort && /usr/local/bin/fort-agent --once --refresh-token-file /run/secrets/fort.refresh --token-path /tmp/fort/access.token >/dev/null && TOKEN="$(cat /tmp/fort/access.token)" && /usr/local/bin/fort --json --host "$FORT_HOST" --token "$TOKEN" auth whoami')"
+  -lc 'mkdir -p /tmp/fort && cp /run/secrets/fort.refresh /tmp/fort/refresh.token && chmod 600 /tmp/fort/refresh.token && /usr/local/bin/fort-agent --once --refresh-token-file /tmp/fort/refresh.token --token-path /tmp/fort/access.token >/dev/null && TOKEN="$(cat /tmp/fort/access.token)" && /usr/local/bin/fort --json --host "$FORT_HOST" --token "$TOKEN" auth whoami')"
 if ! echo "$WHOAMI_JSON" | grep -q '"id": "workload-a"'; then
   echo "unexpected whoami output: $WHOAMI_JSON" >&2
   exit 1

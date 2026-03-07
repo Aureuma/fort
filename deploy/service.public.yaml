@@ -24,8 +24,9 @@ service:
   env:
     FORT_ADDR: ":8088"
     FORT_STATE_PATH: "/var/lib/fort/state.json"
-    FORT_JWT_SIGNING_KEY: "change-me"
-    FORT_BOOTSTRAP_KEY: "change-me"
+    FORT_JWT_SIGNING_KEY_FILE: "/var/lib/fort/jwt-signing.key"
+    FORT_SAFE_ROOT: "/safe"
+    FORT_VAULT_KEYRING_FILE: "/var/lib/fort/si-vault-keyring.json"
     FORT_TOKEN_TTL: "15m"
     FORT_REFRESH_SESSION_TTL: "24h"
     FORT_RUN_TTL: "60s"
@@ -35,5 +36,6 @@ service:
     - si
   volumes:
     - "/var/lib/fort:/var/lib/fort"
+    - "/home/shawn/Development/safe:/safe"
   health:
     kind: none
