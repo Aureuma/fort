@@ -21,12 +21,11 @@ import (
 const version = "dev"
 
 type Client struct {
-	Host         string
-	Token        string
-	BootstrapKey string
-	JSON         bool
-	Timeout      time.Duration
-	http         *http.Client
+	Host    string
+	Token   string
+	JSON    bool
+	Timeout time.Duration
+	http    *http.Client
 }
 
 type stringSliceFlag []string
@@ -49,7 +48,6 @@ func run(args []string) error {
 	fs.SetOutput(io.Discard)
 	host := fs.String("host", envOr("FORT_HOST", "http://127.0.0.1:8088"), "fort API host")
 	token := fs.String("token", envOr("FORT_TOKEN", ""), "bearer token")
-	bootstrap := fs.String("bootstrap-key", envOr("FORT_BOOTSTRAP_KEY", ""), "bootstrap admin key")
 	jsonOut := fs.Bool("json", false, "output JSON")
 	timeout := fs.Duration("timeout", durationEnv("FORT_TIMEOUT", 15*time.Second), "request timeout")
 	if err := fs.Parse(args); err != nil {
@@ -61,12 +59,11 @@ func run(args []string) error {
 	}
 
 	client := &Client{
-		Host:         strings.TrimRight(strings.TrimSpace(*host), "/"),
-		Token:        strings.TrimSpace(*token),
-		BootstrapKey: strings.TrimSpace(*bootstrap),
-		JSON:         *jsonOut,
-		Timeout:      *timeout,
-		http:         &http.Client{Timeout: *timeout},
+		Host:    strings.TrimRight(strings.TrimSpace(*host), "/"),
+		Token:   strings.TrimSpace(*token),
+		JSON:    *jsonOut,
+		Timeout: *timeout,
+		http:    &http.Client{Timeout: *timeout},
 	}
 
 	cmd := strings.TrimSpace(rest[0])
@@ -96,7 +93,7 @@ func run(args []string) error {
 }
 
 func usageRoot() error {
-	return errors.New(`usage: fort [--host URL] [--token TOKEN] [--bootstrap-key KEY] [--json] <command> [args]
+	return errors.New(`usage: fort [--host URL] [--token TOKEN] [--json] <command> [args]
 
 commands:
   doctor
@@ -130,7 +127,63 @@ func durationEnv(name string, fallback time.Duration) time.Duration {
 	return d
 }
 
-func (c *Client) apiRequest(method, path string, body any, useToken, useBootstrap bool) (int, map[string]any, error) {
+func readSecretFile(path string) (string, error) {
+	path = filepath.Clean(strings.TrimSpace(path))
+	if path == "" {
+		return "", errors.New("secret file path is empty")
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", err
+	}
+	if !info.Mode().IsRegular() {
+		return "", errors.New("secret path is not a regular file")
+	}
+	if info.Mode().Perm()&0o077 != 0 {
+		return "", errors.New("secret file permissions must be 0600 or stricter")
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	value := strings.TrimSpace(string(b))
+	if value == "" {
+		return "", errors.New("secret file is empty")
+	}
+	return value, nil
+}
+
+func writeSecretFile(path, value string) error {
+	path = filepath.Clean(strings.TrimSpace(path))
+	value = strings.TrimSpace(value)
+	if path == "" {
+		return errors.New("secret file path is empty")
+	}
+	if value == "" {
+		return errors.New("secret value is empty")
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	if info, err := os.Stat(path); err == nil {
+		if !info.Mode().IsRegular() {
+			return errors.New("secret path is not a regular file")
+		}
+		if info.Mode().Perm()&0o077 != 0 {
+			return errors.New("secret file permissions must be 0600 or stricter")
+		}
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, []byte(value), 0o600); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return err
+	}
+	return os.Chmod(path, 0o600)
+}
+
+func (c *Client) apiRequest(method, path string, body any, useToken bool) (int, map[string]any, error) {
 	var reader io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
@@ -150,12 +203,6 @@ func (c *Client) apiRequest(method, path string, body any, useToken, useBootstra
 			return 0, nil, errors.New("token is required")
 		}
 		req.Header.Set("Authorization", "Bearer "+c.Token)
-	}
-	if useBootstrap {
-		if c.BootstrapKey == "" {
-			return 0, nil, errors.New("bootstrap key is required")
-		}
-		req.Header.Set("X-Fort-Bootstrap-Key", c.BootstrapKey)
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -200,11 +247,11 @@ func (c *Client) cmdDoctor(args []string) error {
 	if len(args) != 0 {
 		return errors.New("usage: fort doctor")
 	}
-	healthStatus, health, err := c.apiRequest(http.MethodGet, "/v1/health", nil, false, false)
+	healthStatus, health, err := c.apiRequest(http.MethodGet, "/v1/health", nil, false)
 	if err != nil {
 		return err
 	}
-	readyStatus, ready, err := c.apiRequest(http.MethodGet, "/v1/ready", nil, false, false)
+	readyStatus, ready, err := c.apiRequest(http.MethodGet, "/v1/ready", nil, false)
 	if err != nil {
 		return err
 	}
@@ -216,7 +263,7 @@ func (c *Client) cmdDoctor(args []string) error {
 		"ready":         ready,
 	}
 	if c.Token != "" {
-		status, whoami, err := c.apiRequest(http.MethodGet, "/v1/auth/whoami", nil, true, false)
+		status, whoami, err := c.apiRequest(http.MethodGet, "/v1/auth/whoami", nil, true)
 		if err == nil {
 			out["whoami_status"] = status
 			out["whoami"] = whoami
@@ -258,11 +305,10 @@ func (c *Client) cmdAuth(args []string) error {
 			body["ttl"] = strings.TrimSpace(*ttl)
 		}
 		useToken := c.Token != ""
-		useBootstrap := c.BootstrapKey != ""
-		if !useToken && !useBootstrap {
-			return errors.New("auth issue requires --token (admin token) or --bootstrap-key")
+		if !useToken {
+			return errors.New("auth issue requires --token (admin token)")
 		}
-		status, resp, err := c.apiRequest(http.MethodPost, "/v1/auth/token", body, useToken, useBootstrap)
+		status, resp, err := c.apiRequest(http.MethodPost, "/v1/auth/token", body, useToken)
 		if err != nil {
 			return err
 		}
@@ -278,7 +324,7 @@ func (c *Client) cmdAuth(args []string) error {
 		if len(args) != 1 {
 			return errors.New("usage: fort auth whoami")
 		}
-		status, resp, err := c.apiRequest(http.MethodGet, "/v1/auth/whoami", nil, true, false)
+		status, resp, err := c.apiRequest(http.MethodGet, "/v1/auth/whoami", nil, true)
 		if err != nil {
 			return err
 		}
@@ -311,11 +357,10 @@ func (c *Client) cmdAuth(args []string) error {
 			}
 		}
 		useToken := c.Token != ""
-		useBootstrap := c.BootstrapKey != ""
-		if !useToken && !useBootstrap {
-			return errors.New("auth list requires --token or --bootstrap-key")
+		if !useToken {
+			return errors.New("auth list requires --token")
 		}
-		status, resp, err := c.apiRequest(http.MethodGet, "/v1/auth/list"+q, nil, useToken, useBootstrap)
+		status, resp, err := c.apiRequest(http.MethodGet, "/v1/auth/list"+q, nil, useToken)
 		if err != nil {
 			return err
 		}
@@ -339,11 +384,10 @@ func (c *Client) cmdAuth(args []string) error {
 			return errors.New("--jti is required")
 		}
 		useToken := c.Token != ""
-		useBootstrap := c.BootstrapKey != ""
-		if !useToken && !useBootstrap {
-			return errors.New("auth revoke requires --token or --bootstrap-key")
+		if !useToken {
+			return errors.New("auth revoke requires --token")
 		}
-		status, resp, err := c.apiRequest(http.MethodPost, "/v1/auth/revoke", map[string]any{"jti": *jti, "reason": *reason}, useToken, useBootstrap)
+		status, resp, err := c.apiRequest(http.MethodPost, "/v1/auth/revoke", map[string]any{"jti": *jti, "reason": *reason}, useToken)
 		if err != nil {
 			return err
 		}
@@ -372,11 +416,15 @@ func (c *Client) cmdAuthSession(args []string) error {
 		aud := fs.String("aud", "fort-api", "audience")
 		accessTTL := fs.String("access-ttl", "", "access token ttl")
 		refreshTTL := fs.String("refresh-ttl", "", "refresh session ttl")
+		refreshTokenOut := fs.String("refresh-token-out", "", "path to write rotated refresh token (0600)")
 		if err := fs.Parse(args[1:]); err != nil {
-			return errors.New("usage: fort auth session open --agent <id> [--access-ttl 15m] [--refresh-ttl 24h] [--aud fort-api]")
+			return errors.New("usage: fort auth session open --agent <id> --refresh-token-out <path> [--access-ttl 15m] [--refresh-ttl 24h] [--aud fort-api]")
 		}
 		if strings.TrimSpace(*agentID) == "" {
 			return errors.New("--agent is required")
+		}
+		if strings.TrimSpace(*refreshTokenOut) == "" {
+			return errors.New("--refresh-token-out is required")
 		}
 		body := map[string]any{
 			"agent_id": strings.TrimSpace(*agentID),
@@ -389,51 +437,77 @@ func (c *Client) cmdAuthSession(args []string) error {
 			body["refresh_ttl"] = strings.TrimSpace(*refreshTTL)
 		}
 		useToken := c.Token != ""
-		useBootstrap := c.BootstrapKey != ""
-		if !useToken && !useBootstrap {
-			return errors.New("auth session open requires --token (admin token) or --bootstrap-key")
+		if !useToken {
+			return errors.New("auth session open requires --token (admin token)")
 		}
-		status, resp, err := c.apiRequest(http.MethodPost, "/v1/auth/session/open", body, useToken, useBootstrap)
+		status, resp, err := c.apiRequest(http.MethodPost, "/v1/auth/session/open", body, useToken)
 		if err != nil {
 			return err
 		}
 		if status != http.StatusOK {
 			return apiErr(status, resp)
 		}
+		refreshToken, _ := resp["refresh_token"].(string)
+		if strings.TrimSpace(refreshToken) == "" {
+			return errors.New("open session response missing refresh_token")
+		}
+		if err := writeSecretFile(*refreshTokenOut, refreshToken); err != nil {
+			return fmt.Errorf("write refresh token file: %w", err)
+		}
+		delete(resp, "refresh_token")
+		resp["refresh_token_file"] = filepath.Clean(strings.TrimSpace(*refreshTokenOut))
 		if c.JSON {
 			return printJSON(resp)
 		}
 		printTextf("session_id=%v\n", resp["session_id"])
 		printTextf("access_token=%v\n", resp["access_token"])
-		printTextf("refresh_token=%v\n", resp["refresh_token"])
+		printTextf("refresh_token_file=%v\n", resp["refresh_token_file"])
 		printTextf("access_expires_at=%v\n", resp["access_expires_at"])
 		printTextf("refresh_expires_at=%v\n", resp["refresh_expires_at"])
 		return nil
 	case "refresh":
 		fs := flag.NewFlagSet("fort auth session refresh", flag.ContinueOnError)
 		fs.SetOutput(io.Discard)
-		refreshToken := fs.String("refresh-token", "", "refresh token")
+		refreshTokenFile := fs.String("refresh-token-file", "", "path to refresh token file (0600)")
+		refreshTokenOut := fs.String("refresh-token-out", "", "path to write rotated refresh token (defaults to --refresh-token-file)")
 		if err := fs.Parse(args[1:]); err != nil {
-			return errors.New("usage: fort auth session refresh --refresh-token <token>")
+			return errors.New("usage: fort auth session refresh --refresh-token-file <path> [--refresh-token-out <path>]")
 		}
-		if strings.TrimSpace(*refreshToken) == "" {
-			return errors.New("--refresh-token is required")
+		if strings.TrimSpace(*refreshTokenFile) == "" {
+			return errors.New("--refresh-token-file is required")
+		}
+		refreshOut := strings.TrimSpace(*refreshTokenOut)
+		if refreshOut == "" {
+			refreshOut = strings.TrimSpace(*refreshTokenFile)
+		}
+		refreshToken, err := readSecretFile(*refreshTokenFile)
+		if err != nil {
+			return fmt.Errorf("read refresh token file: %w", err)
 		}
 		status, resp, err := c.apiRequest(http.MethodPost, "/v1/auth/session/refresh", map[string]any{
-			"refresh_token": strings.TrimSpace(*refreshToken),
-		}, false, false)
+			"refresh_token": refreshToken,
+		}, false)
 		if err != nil {
 			return err
 		}
 		if status != http.StatusOK {
 			return apiErr(status, resp)
 		}
+		nextRefreshToken, _ := resp["refresh_token"].(string)
+		if strings.TrimSpace(nextRefreshToken) == "" {
+			return errors.New("refresh response missing refresh_token")
+		}
+		if err := writeSecretFile(refreshOut, nextRefreshToken); err != nil {
+			return fmt.Errorf("write refresh token file: %w", err)
+		}
+		delete(resp, "refresh_token")
+		resp["refresh_token_file"] = filepath.Clean(refreshOut)
 		if c.JSON {
 			return printJSON(resp)
 		}
 		printTextf("session_id=%v\n", resp["session_id"])
 		printTextf("access_token=%v\n", resp["access_token"])
-		printTextf("refresh_token=%v\n", resp["refresh_token"])
+		printTextf("refresh_token_file=%v\n", resp["refresh_token_file"])
 		printTextf("access_expires_at=%v\n", resp["access_expires_at"])
 		printTextf("refresh_expires_at=%v\n", resp["refresh_expires_at"])
 		return nil
@@ -441,23 +515,26 @@ func (c *Client) cmdAuthSession(args []string) error {
 		fs := flag.NewFlagSet("fort auth session close", flag.ContinueOnError)
 		fs.SetOutput(io.Discard)
 		sessionID := fs.String("session-id", "", "session id")
-		refreshToken := fs.String("refresh-token", "", "refresh token")
+		refreshTokenFile := fs.String("refresh-token-file", "", "path to refresh token file (0600)")
 		if err := fs.Parse(args[1:]); err != nil {
-			return errors.New("usage: fort auth session close [--session-id <id> | --refresh-token <token>]")
+			return errors.New("usage: fort auth session close [--session-id <id> | --refresh-token-file <path>]")
 		}
-		if strings.TrimSpace(*sessionID) == "" && strings.TrimSpace(*refreshToken) == "" {
-			return errors.New("--session-id or --refresh-token is required")
+		if strings.TrimSpace(*sessionID) == "" && strings.TrimSpace(*refreshTokenFile) == "" {
+			return errors.New("--session-id or --refresh-token-file is required")
+		}
+		refreshToken := ""
+		if strings.TrimSpace(*refreshTokenFile) != "" {
+			value, err := readSecretFile(*refreshTokenFile)
+			if err != nil {
+				return fmt.Errorf("read refresh token file: %w", err)
+			}
+			refreshToken = value
 		}
 		useToken := strings.TrimSpace(*sessionID) != ""
-		useBootstrap := false
-		if useToken && c.Token == "" && c.BootstrapKey != "" {
-			useBootstrap = true
-			useToken = false
-		}
 		status, resp, err := c.apiRequest(http.MethodPost, "/v1/auth/session/close", map[string]any{
 			"session_id":    strings.TrimSpace(*sessionID),
-			"refresh_token": strings.TrimSpace(*refreshToken),
-		}, useToken, useBootstrap)
+			"refresh_token": refreshToken,
+		}, useToken)
 		if err != nil {
 			return err
 		}
@@ -487,7 +564,7 @@ func (c *Client) cmdGet(args []string) error {
 	if *repo == "" || *env == "" || *key == "" {
 		return errors.New("--repo, --env, --key are required")
 	}
-	status, resp, err := c.apiRequest(http.MethodPost, "/v1/secrets/get", map[string]any{"repo": *repo, "env": *env, "key": *key}, true, false)
+	status, resp, err := c.apiRequest(http.MethodPost, "/v1/secrets/get", map[string]any{"repo": *repo, "env": *env, "key": *key}, true)
 	if err != nil {
 		return err
 	}
@@ -521,7 +598,7 @@ func (c *Client) cmdSet(args []string) error {
 		"key":         *key,
 		"value":       *value,
 		"cas_version": *casVersion,
-	}, true, false)
+	}, true)
 	if err != nil {
 		return err
 	}
@@ -547,7 +624,7 @@ func (c *Client) cmdList(args []string) error {
 	if *repo == "" || *env == "" {
 		return errors.New("--repo and --env are required")
 	}
-	status, resp, err := c.apiRequest(http.MethodPost, "/v1/secrets/list", map[string]any{"repo": *repo, "env": *env, "prefix": *prefix}, true, false)
+	status, resp, err := c.apiRequest(http.MethodPost, "/v1/secrets/list", map[string]any{"repo": *repo, "env": *env, "prefix": *prefix}, true)
 	if err != nil {
 		return err
 	}
@@ -582,7 +659,7 @@ func (c *Client) cmdBatchGet(args []string) error {
 	if len(keys) == 0 {
 		return errors.New("--keys must include at least one key")
 	}
-	status, resp, err := c.apiRequest(http.MethodPost, "/v1/secrets/batch-get", map[string]any{"repo": *repo, "env": *env, "keys": keys}, true, false)
+	status, resp, err := c.apiRequest(http.MethodPost, "/v1/secrets/batch-get", map[string]any{"repo": *repo, "env": *env, "keys": keys}, true)
 	if err != nil {
 		return err
 	}
@@ -675,7 +752,7 @@ func (c *Client) cmdRun(args []string) error {
 		"keys":        keys,
 		"mode":        modeNorm,
 		"ttl_seconds": ttlSeconds,
-	}, true, false)
+	}, true)
 	if err != nil {
 		return err
 	}
@@ -689,13 +766,13 @@ func (c *Client) cmdRun(args []string) error {
 	}
 
 	defer func() {
-		_, _, _ = c.apiRequest(http.MethodPost, "/v1/run/session/close", map[string]any{"session_id": sessionID}, true, false)
+		_, _, _ = c.apiRequest(http.MethodPost, "/v1/run/session/close", map[string]any{"session_id": sessionID}, true)
 	}()
 
 	materializeStatus, materializeResp, err := c.apiRequest(http.MethodPost, "/v1/run/session/materialize", map[string]any{
 		"session_id":     sessionID,
 		"one_time_token": oneTimeToken,
-	}, true, false)
+	}, true)
 	if err != nil {
 		return err
 	}
@@ -766,7 +843,7 @@ func (c *Client) cmdAgent(args []string) error {
 		if *id == "" {
 			return errors.New("--id is required")
 		}
-		status, resp, err := c.apiRequest(http.MethodPost, "/v1/agents", map[string]any{"id": *id, "type": *typeName, "status": *statusName}, c.Token != "", c.BootstrapKey != "")
+		status, resp, err := c.apiRequest(http.MethodPost, "/v1/agents", map[string]any{"id": *id, "type": *typeName, "status": *statusName}, c.Token != "")
 		if err != nil {
 			return err
 		}
@@ -788,7 +865,7 @@ func (c *Client) cmdAgent(args []string) error {
 		if *id == "" {
 			return errors.New("--id is required")
 		}
-		status, resp, err := c.apiRequest(http.MethodGet, "/v1/agents/"+*id, nil, true, c.BootstrapKey != "")
+		status, resp, err := c.apiRequest(http.MethodGet, "/v1/agents/"+*id, nil, true)
 		if err != nil {
 			return err
 		}
@@ -815,7 +892,7 @@ func (c *Client) cmdAgent(args []string) error {
 		if len(query) > 0 {
 			path += "?" + strings.Join(query, "&")
 		}
-		status, resp, err := c.apiRequest(http.MethodGet, path, nil, c.Token != "", c.BootstrapKey != "")
+		status, resp, err := c.apiRequest(http.MethodGet, path, nil, c.Token != "")
 		if err != nil {
 			return err
 		}
@@ -838,7 +915,7 @@ func (c *Client) cmdAgent(args []string) error {
 		if strings.TrimSpace(*statusName) == "active" {
 			endpoint = "/v1/agents/" + *id + "/enable"
 		}
-		status, resp, err := c.apiRequest(http.MethodPost, endpoint, map[string]any{}, c.Token != "", c.BootstrapKey != "")
+		status, resp, err := c.apiRequest(http.MethodPost, endpoint, map[string]any{}, c.Token != "")
 		if err != nil {
 			return err
 		}
@@ -856,7 +933,7 @@ func (c *Client) cmdAgent(args []string) error {
 		if *id == "" {
 			return errors.New("--id is required")
 		}
-		status, resp, err := c.apiRequest(http.MethodPost, "/v1/agents/"+*id+"/rotate", map[string]any{}, c.Token != "", c.BootstrapKey != "")
+		status, resp, err := c.apiRequest(http.MethodPost, "/v1/agents/"+*id+"/rotate", map[string]any{}, c.Token != "")
 		if err != nil {
 			return err
 		}
@@ -875,7 +952,7 @@ func (c *Client) cmdAgent(args []string) error {
 		if *id == "" {
 			return errors.New("--id is required")
 		}
-		status, resp, err := c.apiRequest(http.MethodDelete, "/v1/agents/"+*id, nil, c.Token != "", c.BootstrapKey != "")
+		status, resp, err := c.apiRequest(http.MethodDelete, "/v1/agents/"+*id, nil, c.Token != "")
 		if err != nil {
 			return err
 		}
@@ -933,7 +1010,7 @@ func (c *Client) cmdAgentPolicy(args []string) error {
 		if *id == "" {
 			return errors.New("--id is required")
 		}
-		status, resp, err := c.apiRequest(http.MethodGet, "/v1/agents/"+*id+"/policy", nil, c.Token != "", c.BootstrapKey != "")
+		status, resp, err := c.apiRequest(http.MethodGet, "/v1/agents/"+*id+"/policy", nil, c.Token != "")
 		if err != nil {
 			return err
 		}
@@ -962,7 +1039,7 @@ func (c *Client) cmdAgentPolicy(args []string) error {
 			}
 			bindings = append(bindings, binding)
 		}
-		status, resp, err := c.apiRequest(http.MethodPut, "/v1/agents/"+*id+"/policy", map[string]any{"bindings": bindings}, c.Token != "", c.BootstrapKey != "")
+		status, resp, err := c.apiRequest(http.MethodPut, "/v1/agents/"+*id+"/policy", map[string]any{"bindings": bindings}, c.Token != "")
 		if err != nil {
 			return err
 		}
@@ -986,7 +1063,7 @@ func (c *Client) cmdAgentPolicy(args []string) error {
 			return err
 		}
 		path := "/v1/agents/" + *id + "/policy/" + sub
-		status, resp, err := c.apiRequest(http.MethodPost, path, map[string]any{"binding": binding}, c.Token != "", c.BootstrapKey != "")
+		status, resp, err := c.apiRequest(http.MethodPost, path, map[string]any{"binding": binding}, c.Token != "")
 		if err != nil {
 			return err
 		}
@@ -1011,7 +1088,7 @@ func (c *Client) cmdAgentPolicy(args []string) error {
 			"repo": *repo,
 			"env":  *env,
 			"op":   *op,
-		}, c.Token != "", c.BootstrapKey != "")
+		}, c.Token != "")
 		if err != nil {
 			return err
 		}

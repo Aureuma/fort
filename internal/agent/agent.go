@@ -15,15 +15,15 @@ import (
 )
 
 type Config struct {
-	Host         string
-	RefreshToken string
-	TokenPath    string
-	RefreshRatio float64
-	Jitter       time.Duration
-	MinSleep     time.Duration
-	MaxBackoff   time.Duration
-	HTTPTimeout  time.Duration
-	Once         bool
+	Host             string
+	RefreshTokenFile string
+	TokenPath        string
+	RefreshRatio     float64
+	Jitter           time.Duration
+	MinSleep         time.Duration
+	MaxBackoff       time.Duration
+	HTTPTimeout      time.Duration
+	Once             bool
 }
 
 type Runtime struct {
@@ -32,7 +32,9 @@ type Runtime struct {
 	rng      *rand.Rand
 	now      func() time.Time
 	sleep    func(context.Context, time.Duration) error
+	readTok  func(path string) (string, error)
 	writeTok func(path, value string) error
+	writeRef func(path, value string) error
 }
 
 type jitterRand interface {
@@ -41,13 +43,13 @@ type jitterRand interface {
 
 func New(cfg Config) (*Runtime, error) {
 	cfg.Host = strings.TrimRight(strings.TrimSpace(cfg.Host), "/")
-	cfg.RefreshToken = strings.TrimSpace(cfg.RefreshToken)
+	cfg.RefreshTokenFile = strings.TrimSpace(cfg.RefreshTokenFile)
 	cfg.TokenPath = strings.TrimSpace(cfg.TokenPath)
 	if cfg.Host == "" {
 		return nil, fmt.Errorf("host is required")
 	}
-	if cfg.RefreshToken == "" {
-		return nil, fmt.Errorf("refresh token is required")
+	if cfg.RefreshTokenFile == "" {
+		return nil, fmt.Errorf("refresh token file is required")
 	}
 	if cfg.TokenPath == "" {
 		return nil, fmt.Errorf("token path is required")
@@ -73,7 +75,9 @@ func New(cfg Config) (*Runtime, error) {
 		rng:      rand.New(rand.NewSource(time.Now().UnixNano())),
 		now:      func() time.Time { return time.Now().UTC() },
 		sleep:    sleepContext,
+		readTok:  readSecretTokenFile,
 		writeTok: writeTokenAtomic,
+		writeRef: writeSecretTokenFile,
 	}
 	return r, nil
 }
@@ -178,8 +182,67 @@ func writeTokenAtomic(path, value string) error {
 	return os.Rename(tmp, path)
 }
 
+func readSecretTokenFile(path string) (string, error) {
+	path = filepath.Clean(strings.TrimSpace(path))
+	if path == "" {
+		return "", fmt.Errorf("refresh token path is empty")
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return "", err
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("refresh token path is not a regular file")
+	}
+	if info.Mode().Perm()&0o077 != 0 {
+		return "", fmt.Errorf("refresh token file permissions must be 0600 or stricter")
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	token := strings.TrimSpace(string(raw))
+	if token == "" {
+		return "", fmt.Errorf("refresh token file is empty")
+	}
+	return token, nil
+}
+
+func writeSecretTokenFile(path, value string) error {
+	path = filepath.Clean(strings.TrimSpace(path))
+	value = strings.TrimSpace(value)
+	if path == "" {
+		return fmt.Errorf("refresh token path is empty")
+	}
+	if value == "" {
+		return fmt.Errorf("refresh token value is empty")
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	if info, err := os.Stat(path); err == nil {
+		if !info.Mode().IsRegular() {
+			return fmt.Errorf("refresh token path is not a regular file")
+		}
+		if info.Mode().Perm()&0o077 != 0 {
+			return fmt.Errorf("refresh token file permissions must be 0600 or stricter")
+		}
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, []byte(value), 0o600); err != nil {
+		return err
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		return err
+	}
+	return os.Chmod(path, 0o600)
+}
+
 func (r *Runtime) Run(ctx context.Context) error {
-	refreshToken := r.cfg.RefreshToken
+	refreshToken, err := r.readTok(r.cfg.RefreshTokenFile)
+	if err != nil {
+		return fmt.Errorf("read refresh token file: %w", err)
+	}
 	backoff := time.Second
 	for {
 		select {
@@ -214,6 +277,9 @@ func (r *Runtime) Run(ctx context.Context) error {
 		accessExpiresAt, err := time.Parse(time.RFC3339Nano, res.AccessExpiresAt)
 		if err != nil {
 			return fmt.Errorf("parse access_expires_at: %w", err)
+		}
+		if err := r.writeRef(r.cfg.RefreshTokenFile, res.RefreshToken); err != nil {
+			return fmt.Errorf("write refresh token: %w", err)
 		}
 		if err := r.writeTok(r.cfg.TokenPath, res.AccessToken); err != nil {
 			return fmt.Errorf("write token: %w", err)

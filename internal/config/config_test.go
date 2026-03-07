@@ -26,4 +26,3 @@ func TestFromEnvAcceptsStrongSigningKey(t *testing.T) {
 		t.Fatalf("unexpected signing key in config")
 	}
 }
-

@@ -42,12 +42,17 @@ func TestRuntimeRunOnceWritesToken(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	tokenPath := filepath.Join(t.TempDir(), "token.txt")
+	workdir := t.TempDir()
+	tokenPath := filepath.Join(workdir, "token.txt")
+	refreshPath := filepath.Join(workdir, "refresh.token")
+	if err := os.WriteFile(refreshPath, []byte("refresh-1"), 0o600); err != nil {
+		t.Fatalf("write refresh token file: %v", err)
+	}
 	rt, err := New(Config{
-		Host:         ts.URL,
-		RefreshToken: "refresh-1",
-		TokenPath:    tokenPath,
-		Once:         true,
+		Host:             ts.URL,
+		RefreshTokenFile: refreshPath,
+		TokenPath:        tokenPath,
+		Once:             true,
 	})
 	if err != nil {
 		t.Fatalf("new runtime: %v", err)
@@ -61,6 +66,29 @@ func TestRuntimeRunOnceWritesToken(t *testing.T) {
 	}
 	if string(b) != access {
 		t.Fatalf("unexpected token written: %q", string(b))
+	}
+	refreshed, err := os.ReadFile(refreshPath)
+	if err != nil {
+		t.Fatalf("read refresh token file: %v", err)
+	}
+	if string(refreshed) != nextRefresh {
+		t.Fatalf("unexpected rotated refresh token written: %q", string(refreshed))
+	}
+}
+
+func TestNewRejectsMissingRefreshTokenFile(t *testing.T) {
+	if _, err := New(Config{Host: "http://127.0.0.1:8088", TokenPath: "/tmp/access.token"}); err == nil {
+		t.Fatalf("expected missing refresh token file to fail")
+	}
+}
+
+func TestReadSecretTokenFileRejectsBroadPermissions(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "refresh.token")
+	if err := os.WriteFile(path, []byte("rft_123"), 0o644); err != nil {
+		t.Fatalf("write token file: %v", err)
+	}
+	if _, err := readSecretTokenFile(path); err == nil {
+		t.Fatalf("expected broad file permissions to fail")
 	}
 }
 

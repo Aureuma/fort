@@ -49,7 +49,7 @@ func floatEnv(name string, fallback float64) float64 {
 func main() {
 	fs := flag.NewFlagSet("fort-agent", flag.ExitOnError)
 	host := fs.String("host", envOr("FORT_HOST", "http://127.0.0.1:8088"), "fort API host")
-	refreshToken := fs.String("refresh-token", envOr("FORT_REFRESH_TOKEN", ""), "refresh token")
+	refreshTokenFile := fs.String("refresh-token-file", envOr("FORT_REFRESH_TOKEN_FILE", ""), "path to refresh token file (0600)")
 	tokenPath := fs.String("token-path", envOr("FORT_TOKEN_PATH", "/tmp/fort/access.token"), "access token output path")
 	refreshRatio := fs.Float64("refresh-ratio", floatEnv("FORT_AGENT_REFRESH_RATIO", 0.70), "refresh ratio for access token lifetime")
 	jitter := fs.Duration("jitter", durationEnv("FORT_AGENT_JITTER", 10*time.Second), "refresh jitter window")
@@ -60,15 +60,15 @@ func main() {
 	fs.Parse(os.Args[1:])
 
 	rt, err := agent.New(agent.Config{
-		Host:         *host,
-		RefreshToken: *refreshToken,
-		TokenPath:    *tokenPath,
-		RefreshRatio: *refreshRatio,
-		Jitter:       *jitter,
-		MinSleep:     *minSleep,
-		MaxBackoff:   *maxBackoff,
-		HTTPTimeout:  *httpTimeout,
-		Once:         *once,
+		Host:             *host,
+		RefreshTokenFile: *refreshTokenFile,
+		TokenPath:        *tokenPath,
+		RefreshRatio:     *refreshRatio,
+		Jitter:           *jitter,
+		MinSleep:         *minSleep,
+		MaxBackoff:       *maxBackoff,
+		HTTPTimeout:      *httpTimeout,
+		Once:             *once,
 	})
 	if err != nil {
 		log.Fatalf("config: %v", err)
