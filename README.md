@@ -86,4 +86,5 @@ Both deploy manifests require `FORT_JWT_SIGNING_KEY_FILE` mounted from the host.
 ```bash
 go test ./...
 ./scripts/smoke-container.sh
+./scripts/e2e-si-vault.sh
 ```
