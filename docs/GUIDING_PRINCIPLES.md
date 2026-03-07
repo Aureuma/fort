@@ -14,12 +14,15 @@ Fort is not a secret database. It must remain a thin API wrapper over SI Vault-b
 ## Authentication Model
 - Workloads use short-lived JWT access tokens.
 - Refresh uses rotating opaque refresh tokens.
+- Only one active refresh session is allowed per agent at a time.
 - Refresh-token reuse is compromise and revokes session state.
+- `fort-breakglass-admin` token re-issuance revokes prior active break-glass tokens and refresh sessions.
 - Agent credential rotation invalidates old tokens and refresh sessions.
 
 ## Secret Handling Model
 - Refresh tokens and signing keys are file-backed secrets.
 - Required file mode is `0600` (or stricter).
+- SI Vault ciphertext files (`safe/<repo>/.env.<env>`) are required to be regular files with `0600` (or stricter).
 - Refresh tokens are not passed via environment variables.
 - Secret scope reads fail fast when `.env.<env>` or keyring scope material is missing.
 

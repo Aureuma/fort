@@ -27,8 +27,11 @@ Fort state is limited to:
 - Workload access is policy-scoped by `repo`, `env`, and operation.
 - Access tokens are short-lived JWTs with strict claim validation (`iss/sub/aud/jti/iat/nbf/exp`).
 - Refresh sessions use rotating opaque refresh tokens with reuse detection and compromise revocation.
+- Only one active refresh session is allowed per agent; opening a new one revokes prior active sessions.
+- `fort-breakglass-admin` must have a single active break-glass auth state; reissue revokes prior active tokens/sessions.
 - Agent credential rotation invalidates prior access tokens and refresh sessions.
 - Refresh tokens and JWT signing keys are file-backed secrets only (`0600`), never env-injected secret values.
+- SI Vault ciphertext files (`safe/<repo>/.env.<env>`) must be regular files with `0600` (or stricter).
 
 ## Provisioning and Bootstrap
 - There is no production seeding/bootstrap shortcut.

@@ -27,12 +27,15 @@ Fort does not:
 - All secret reads/writes resolve against SI Vault-backed `safe` `.env` material.
 - Workloads authenticate with short-lived access tokens and rotating refresh sessions.
 - Refresh and signing secrets are file-backed and strict-permissioned (`0600`), never env-injected secret values.
+- SI Vault ciphertext files (`safe/<repo>/.env.<env>`) must be regular files with `0600` (or stricter).
 - Provisioning is explicit and authenticated; there is no hidden bootstrap bypass path.
 
 ## Auth & Session Security
 - Access tokens are short-lived JWT bearer tokens.
 - Refresh sessions use opaque rotating refresh tokens.
+- Opening a refresh session for an agent revokes any prior active refresh session for that same agent.
 - Reuse of a rotated refresh token is treated as compromise; Fort revokes that refresh session.
+- For `fort-breakglass-admin`, token issuance revokes any prior active break-glass tokens and refresh sessions.
 - Agent credential rotation invalidates prior auth artifacts:
   - existing access tokens are rejected via `credential_version`
   - existing refresh sessions are revoked
