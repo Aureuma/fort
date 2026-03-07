@@ -25,6 +25,7 @@ type Claims struct {
 
 type Manager struct {
 	SigningKey []byte
+	Issuer     string
 	Store      *store.Store
 	Now        func() time.Time
 }
@@ -52,9 +53,34 @@ func randomID(prefix string, bytes int) (string, error) {
 	return prefix + raw, nil
 }
 
+func (m *Manager) issuer() string {
+	issuer := strings.TrimSpace(m.Issuer)
+	if issuer == "" {
+		return "fortd"
+	}
+	return issuer
+}
+
+func containsAudience(aud jwt.ClaimStrings, expected string) bool {
+	expected = strings.TrimSpace(expected)
+	if expected == "" {
+		return false
+	}
+	for _, candidate := range aud {
+		if strings.TrimSpace(candidate) == expected {
+			return true
+		}
+	}
+	return false
+}
+
 func (m *Manager) Issue(agent model.Agent, ttl time.Duration, audience string) (string, model.TokenRecord, error) {
 	if ttl <= 0 {
 		ttl = 15 * time.Minute
+	}
+	audience = strings.TrimSpace(audience)
+	if audience == "" {
+		audience = "fort-api"
 	}
 	now := m.now()
 	exp := now.Add(ttl)
@@ -67,6 +93,7 @@ func (m *Manager) Issue(agent model.Agent, ttl time.Duration, audience string) (
 		Type:    string(agent.Type),
 		RegisteredClaims: jwt.RegisteredClaims{
 			ID:        jti,
+			Issuer:    m.issuer(),
 			Subject:   agent.ID,
 			Audience:  jwt.ClaimStrings{audience},
 			IssuedAt:  jwt.NewNumericDate(now),
@@ -150,8 +177,29 @@ func (m *Manager) Parse(token string) (Claims, error) {
 	if claims.ID == "" || claims.AgentID == "" {
 		return Claims{}, ErrUnauthorized
 	}
+	if claims.Subject == "" || claims.Subject != claims.AgentID {
+		return Claims{}, ErrUnauthorized
+	}
+	if strings.TrimSpace(claims.Issuer) == "" || strings.TrimSpace(claims.Issuer) != m.issuer() {
+		return Claims{}, ErrUnauthorized
+	}
+	if claims.IssuedAt == nil || claims.ExpiresAt == nil || claims.NotBefore == nil {
+		return Claims{}, ErrUnauthorized
+	}
+	if claims.IssuedAt.Time.IsZero() || claims.ExpiresAt.Time.IsZero() || claims.NotBefore.Time.IsZero() {
+		return Claims{}, ErrUnauthorized
+	}
+	if len(claims.Audience) == 0 {
+		return Claims{}, ErrUnauthorized
+	}
 	rec, err := m.Store.GetToken(claims.ID)
 	if err != nil {
+		return Claims{}, ErrUnauthorized
+	}
+	if rec.AgentID != claims.AgentID {
+		return Claims{}, ErrUnauthorized
+	}
+	if !containsAudience(claims.Audience, rec.Audience) {
 		return Claims{}, ErrUnauthorized
 	}
 	now := m.now()
