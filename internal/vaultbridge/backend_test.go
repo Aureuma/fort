@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"syscall"
 	"testing"
 )
 
@@ -73,5 +74,39 @@ func TestListReturnsNotFoundWhenKeyringEntryMissing(t *testing.T) {
 	}
 	if _, err := backend.List("safe", "dev", ""); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("expected ErrNotFound for missing keyring entry, got %v", err)
+	}
+}
+
+func TestWriteDotenvPreservesOwnerAndMode(t *testing.T) {
+	tmp := t.TempDir()
+	path := filepath.Join(tmp, ".env.dev")
+	if err := os.WriteFile(path, []byte("FOO=bar\n"), 0o600); err != nil {
+		t.Fatalf("seed env file: %v", err)
+	}
+	beforeInfo, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat before: %v", err)
+	}
+	beforeStat, ok := beforeInfo.Sys().(*syscall.Stat_t)
+	if !ok {
+		t.Fatalf("unexpected stat type")
+	}
+
+	if err := writeDotenv(path, map[string]string{"BAR": "baz"}); err != nil {
+		t.Fatalf("writeDotenv: %v", err)
+	}
+	afterInfo, err := os.Stat(path)
+	if err != nil {
+		t.Fatalf("stat after: %v", err)
+	}
+	afterStat, ok := afterInfo.Sys().(*syscall.Stat_t)
+	if !ok {
+		t.Fatalf("unexpected stat type")
+	}
+	if beforeStat.Uid != afterStat.Uid || beforeStat.Gid != afterStat.Gid {
+		t.Fatalf("owner changed: before=%d:%d after=%d:%d", beforeStat.Uid, beforeStat.Gid, afterStat.Uid, afterStat.Gid)
+	}
+	if got := afterInfo.Mode().Perm(); got != 0o600 {
+		t.Fatalf("unexpected mode: got %o want 600", got)
 	}
 }

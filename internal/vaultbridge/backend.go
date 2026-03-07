@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 
 	ecies "github.com/ecies/go/v2"
 )
@@ -147,7 +148,8 @@ func loadDotenv(path string, failIfMissing bool) (map[string]string, error) {
 }
 
 func writeDotenv(path string, values map[string]string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	dir := filepath.Dir(path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
 	keys := make([]string, 0, len(values))
@@ -166,7 +168,31 @@ func writeDotenv(path string, values map[string]string) error {
 	if err := os.WriteFile(tmp, []byte(b.String()), 0o600); err != nil {
 		return err
 	}
+	if uid, gid, ok := targetOwner(path, dir); ok {
+		if err := os.Chown(tmp, uid, gid); err != nil && !errors.Is(err, syscall.EPERM) {
+			return err
+		}
+	}
 	return os.Rename(tmp, path)
+}
+
+func targetOwner(path, dir string) (int, int, bool) {
+	if uid, gid, ok := statOwner(path); ok {
+		return uid, gid, true
+	}
+	return statOwner(dir)
+}
+
+func statOwner(path string) (int, int, bool) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return 0, 0, false
+	}
+	stat, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return 0, 0, false
+	}
+	return int(stat.Uid), int(stat.Gid), true
 }
 
 func (b *Backend) loadKeyringEntry(repo, env string) (keyringEntry, error) {
