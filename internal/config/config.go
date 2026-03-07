@@ -12,7 +12,9 @@ type Config struct {
 	Addr              string
 	StatePath         string
 	SigningKey        string
-	BootstrapKey      string
+	SafeRoot          string
+	KeyringPath       string
+	ExtraPrivateKeys  []string
 	TokenTTL          time.Duration
 	RefreshSessionTTL time.Duration
 	RunTTL            time.Duration
@@ -20,18 +22,28 @@ type Config struct {
 }
 
 func FromEnv() (Config, error) {
+	signingKey := strings.TrimSpace(os.Getenv("FORT_JWT_SIGNING_KEY"))
 	cfg := Config{
 		Addr:              env("FORT_ADDR", ":8088"),
 		StatePath:         env("FORT_STATE_PATH", "./fort-state.json"),
-		SigningKey:        env("FORT_JWT_SIGNING_KEY", "dev-only-change-me"),
-		BootstrapKey:      env("FORT_BOOTSTRAP_KEY", "fort-bootstrap-dev"),
+		SigningKey:        signingKey,
+		SafeRoot:          env("FORT_SAFE_ROOT", "/safe"),
+		KeyringPath:       env("FORT_VAULT_KEYRING_FILE", defaultVaultKeyringPath()),
+		ExtraPrivateKeys:  splitCSV(env("FORT_VAULT_PRIVATE_KEYS", "")),
 		TokenTTL:          durationEnv("FORT_TOKEN_TTL", 15*time.Minute),
 		RefreshSessionTTL: durationEnv("FORT_REFRESH_SESSION_TTL", 24*time.Hour),
 		RunTTL:            durationEnv("FORT_RUN_TTL", 60*time.Second),
 		SecretTTL:         durationEnv("FORT_SECRET_TTL", 120*time.Second),
 	}
-	if strings.TrimSpace(cfg.SigningKey) == "" {
+	if cfg.SigningKey == "" {
 		return Config{}, fmt.Errorf("FORT_JWT_SIGNING_KEY is required")
+	}
+	if len(cfg.SigningKey) < 32 {
+		return Config{}, fmt.Errorf("FORT_JWT_SIGNING_KEY must be at least 32 characters")
+	}
+	switch strings.ToLower(cfg.SigningKey) {
+	case "change-me", "dev-only-change-me":
+		return Config{}, fmt.Errorf("FORT_JWT_SIGNING_KEY uses an insecure placeholder value")
 	}
 	return cfg, nil
 }
@@ -57,4 +69,25 @@ func env(name, fallback string) string {
 		return fallback
 	}
 	return v
+}
+
+func splitCSV(raw string) []string {
+	parts := strings.Split(strings.TrimSpace(raw), ",")
+	out := make([]string, 0, len(parts))
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+		out = append(out, part)
+	}
+	return out
+}
+
+func defaultVaultKeyringPath() string {
+	home, err := os.UserHomeDir()
+	if err != nil || strings.TrimSpace(home) == "" {
+		return ""
+	}
+	return home + "/.si/vault/si-vault-keyring.json"
 }
