@@ -1,0 +1,77 @@
+package vaultbridge
+
+import (
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func writeKeyring(t *testing.T, path string, entries map[string]any) {
+	t.Helper()
+	doc := map[string]any{
+		"entries": entries,
+	}
+	raw, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatalf("marshal keyring: %v", err)
+	}
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		t.Fatalf("write keyring: %v", err)
+	}
+}
+
+func TestListReturnsNotFoundWhenEnvFileMissing(t *testing.T) {
+	tmp := t.TempDir()
+	safeRoot := filepath.Join(tmp, "safe-root")
+	if err := os.MkdirAll(filepath.Join(safeRoot, "safe"), 0o755); err != nil {
+		t.Fatalf("mkdir safe root: %v", err)
+	}
+	keyring := filepath.Join(tmp, "keyring.json")
+	writeKeyring(t, keyring, map[string]any{
+		"safe/dev": map[string]any{
+			"repo": "safe",
+			"env":  "dev",
+		},
+	})
+	backend, err := New(Config{
+		SafeRoot:    safeRoot,
+		KeyringPath: keyring,
+	})
+	if err != nil {
+		t.Fatalf("new backend: %v", err)
+	}
+	if _, err := backend.List("safe", "dev", ""); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound for missing env file, got %v", err)
+	}
+}
+
+func TestListReturnsNotFoundWhenKeyringEntryMissing(t *testing.T) {
+	tmp := t.TempDir()
+	safeRoot := filepath.Join(tmp, "safe-root")
+	repoDir := filepath.Join(safeRoot, "safe")
+	if err := os.MkdirAll(repoDir, 0o755); err != nil {
+		t.Fatalf("mkdir repo dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repoDir, ".env.dev"), []byte("FOO=bar\n"), 0o600); err != nil {
+		t.Fatalf("write env file: %v", err)
+	}
+	keyring := filepath.Join(tmp, "keyring.json")
+	writeKeyring(t, keyring, map[string]any{
+		"safe/prod": map[string]any{
+			"repo": "safe",
+			"env":  "prod",
+		},
+	})
+	backend, err := New(Config{
+		SafeRoot:    safeRoot,
+		KeyringPath: keyring,
+	})
+	if err != nil {
+		t.Fatalf("new backend: %v", err)
+	}
+	if _, err := backend.List("safe", "dev", ""); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("expected ErrNotFound for missing keyring entry, got %v", err)
+	}
+}

@@ -46,7 +46,7 @@ func Run() error {
 func run(args []string) error {
 	fs := flag.NewFlagSet("fort", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	host := fs.String("host", envOr("FORT_HOST", "http://127.0.0.1:8088"), "fort API host")
+	host := fs.String("host", envOr("FORT_HOST", "https://fort.aureuma.com"), "fort API host")
 	token := fs.String("token", envOr("FORT_TOKEN", ""), "bearer token")
 	jsonOut := fs.Bool("json", false, "output JSON")
 	timeout := fs.Duration("timeout", durationEnv("FORT_TIMEOUT", 15*time.Second), "request timeout")

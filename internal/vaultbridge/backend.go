@@ -115,10 +115,13 @@ func (b *Backend) envFilePath(repo, env string) string {
 	return filepath.Join(b.safeRoot, repo, ".env."+env)
 }
 
-func loadDotenv(path string) (map[string]string, error) {
+func loadDotenv(path string, failIfMissing bool) (map[string]string, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
+			if failIfMissing {
+				return nil, ErrNotFound
+			}
 			return map[string]string{}, nil
 		}
 		return nil, err
@@ -282,7 +285,7 @@ func (b *Backend) Get(repo, env, key string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	values, err := loadDotenv(b.envFilePath(repo, env))
+	values, err := loadDotenv(b.envFilePath(repo, env), true)
 	if err != nil {
 		return "", err
 	}
@@ -319,8 +322,11 @@ func (b *Backend) List(repo, env, prefix string) ([]string, error) {
 		return nil, err
 	}
 	prefix = strings.TrimSpace(prefix)
-	values, err := loadDotenv(b.envFilePath(repo, env))
+	values, err := loadDotenv(b.envFilePath(repo, env), true)
 	if err != nil {
+		return nil, err
+	}
+	if _, err := b.loadKeyringEntry(repo, env); err != nil {
 		return nil, err
 	}
 	keys := make([]string, 0, len(values))
@@ -358,7 +364,7 @@ func (b *Backend) Set(repo, env, key, value string) error {
 	path := b.envFilePath(repo, env)
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	values, err := loadDotenv(path)
+	values, err := loadDotenv(path, false)
 	if err != nil {
 		return err
 	}

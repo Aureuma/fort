@@ -617,6 +617,10 @@ func (h *handler) handleSecretList(w http.ResponseWriter, r *http.Request) {
 	}
 	keys, err := h.vault.List(repo, env, prefix)
 	if err != nil {
+		if errors.Is(err, vaultbridge.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "secret scope not found")
+			return
+		}
 		if errors.Is(err, vaultbridge.ErrInvalid) {
 			writeError(w, http.StatusBadRequest, "invalid secret target")
 			return

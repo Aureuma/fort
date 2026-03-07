@@ -277,6 +277,31 @@ func TestDefaultDenyWithoutBinding(t *testing.T) {
 	}
 }
 
+func TestSecretListReturnsNotFoundWhenScopeMissing(t *testing.T) {
+	ts, adminToken := newTestAPI(t)
+	client := ts.Client()
+	adminHeaders := map[string]string{"Authorization": "Bearer " + adminToken}
+
+	mustCreateAgent(t, client, ts.URL, adminToken, "list-missing", "workload")
+	mustSetPolicy(t, client, ts.URL, adminToken, "list-missing", []map[string]any{{
+		"repo": "*",
+		"env":  "*",
+		"ops":  []string{"list"},
+	}})
+	workloadToken := mustIssueToken(t, client, ts.URL, "list-missing", adminHeaders)
+
+	status, body := doJSON(t, client, http.MethodPost, ts.URL+"/v1/secrets/list", map[string]any{
+		"repo": "safe",
+		"env":  "dev",
+	}, map[string]string{"Authorization": "Bearer " + workloadToken})
+	if status != http.StatusNotFound {
+		t.Fatalf("expected not found, got status=%d body=%v", status, body)
+	}
+	if got := body["error"]; got != "secret scope not found" {
+		t.Fatalf("unexpected error payload: %v", body)
+	}
+}
+
 func TestAuthSessionOpenRefreshAndClose(t *testing.T) {
 	ts, adminToken := newTestAPI(t)
 	client := ts.Client()

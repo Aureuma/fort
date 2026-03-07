@@ -21,6 +21,7 @@ Fort is not a secret database. It must remain a thin API wrapper over SI Vault-b
 - Refresh tokens and signing keys are file-backed secrets.
 - Required file mode is `0600` (or stricter).
 - Refresh tokens are not passed via environment variables.
+- Secret scope reads fail fast when `.env.<env>` or keyring scope material is missing.
 
 ## What Was Hardened
 - Documented and enforced file-only refresh-token handling.
