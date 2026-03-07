@@ -228,3 +228,92 @@ func TestParseRejectsSubjectAgentIDMismatch(t *testing.T) {
 		t.Fatalf("expected unauthorized for subject mismatch, got %v", err)
 	}
 }
+
+func TestOpenRefreshSessionRevokesPriorActiveSessionForSameAgent(t *testing.T) {
+	now := time.Date(2026, 3, 4, 12, 0, 0, 0, time.UTC)
+	mgr, st, agent := newAuthManager(t, now)
+
+	_, _, firstSession, firstRefreshToken, err := mgr.OpenRefreshSession(agent, 2*time.Minute, time.Hour, "fort-api")
+	if err != nil {
+		t.Fatalf("open first refresh session: %v", err)
+	}
+
+	mgr.Now = func() time.Time { return now.Add(30 * time.Second) }
+	_, _, secondSession, secondRefreshToken, err := mgr.OpenRefreshSession(agent, 2*time.Minute, time.Hour, "fort-api")
+	if err != nil {
+		t.Fatalf("open second refresh session: %v", err)
+	}
+	if firstSession.ID == secondSession.ID {
+		t.Fatalf("expected a new refresh session id")
+	}
+	if _, _, _, _, err := mgr.RefreshByToken(firstRefreshToken); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("expected first refresh token unauthorized after second session open, got %v", err)
+	}
+	if _, _, _, _, err := mgr.RefreshByToken(secondRefreshToken); err != nil {
+		t.Fatalf("expected second refresh token to remain valid, got %v", err)
+	}
+	stored, err := st.GetRefreshSession(firstSession.ID)
+	if err != nil {
+		t.Fatalf("get first refresh session: %v", err)
+	}
+	if stored.RevokedAt.IsZero() {
+		t.Fatalf("expected first refresh session revoked")
+	}
+}
+
+func TestIssueBreakglassRevokesPriorActiveArtifacts(t *testing.T) {
+	now := time.Date(2026, 3, 4, 12, 0, 0, 0, time.UTC)
+	mgr, st, _ := newAuthManager(t, now)
+	breakglass, err := st.CreateAgent(breakglassAdminAgentID, model.AgentTypeUser, model.AgentStatusActive, now)
+	if err != nil {
+		t.Fatalf("create breakglass agent: %v", err)
+	}
+
+	_, _, firstSession, firstRefreshToken, err := mgr.OpenRefreshSession(breakglass, 2*time.Minute, time.Hour, "fort-api")
+	if err != nil {
+		t.Fatalf("open breakglass refresh session: %v", err)
+	}
+	firstToken, firstIssuedRecord, err := mgr.Issue(breakglass, 15*time.Minute, "fort-api")
+	if err != nil {
+		t.Fatalf("issue first breakglass token: %v", err)
+	}
+	if _, err := mgr.Parse(firstToken); err != nil {
+		t.Fatalf("parse first breakglass token: %v", err)
+	}
+
+	mgr.Now = func() time.Time { return now.Add(10 * time.Second) }
+	secondToken, secondRecord, err := mgr.Issue(breakglass, 15*time.Minute, "fort-api")
+	if err != nil {
+		t.Fatalf("issue second breakglass token: %v", err)
+	}
+	if firstIssuedRecord.JTI == secondRecord.JTI {
+		t.Fatalf("expected a new token record")
+	}
+	if _, err := mgr.Parse(secondToken); err != nil {
+		t.Fatalf("parse second breakglass token: %v", err)
+	}
+	if _, err := mgr.Parse(firstToken); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("expected first breakglass token unauthorized after reissue, got %v", err)
+	}
+	if _, _, _, _, err := mgr.RefreshByToken(firstRefreshToken); !errors.Is(err, ErrUnauthorized) {
+		t.Fatalf("expected old breakglass refresh token unauthorized, got %v", err)
+	}
+
+	firstStored, err := st.GetToken(firstIssuedRecord.JTI)
+	if err != nil {
+		t.Fatalf("get first breakglass token record: %v", err)
+	}
+	if firstStored.RevokedAt.IsZero() {
+		t.Fatalf("expected first breakglass token revoked")
+	}
+	if firstStored.Reason != "breakglass_reissued" {
+		t.Fatalf("unexpected first breakglass revoke reason=%q", firstStored.Reason)
+	}
+	sessionStored, err := st.GetRefreshSession(firstSession.ID)
+	if err != nil {
+		t.Fatalf("get breakglass refresh session: %v", err)
+	}
+	if sessionStored.RevokedAt.IsZero() {
+		t.Fatalf("expected breakglass refresh session revoked on reissue")
+	}
+}

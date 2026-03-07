@@ -18,6 +18,8 @@ import (
 var ErrUnauthorized = errors.New("unauthorized")
 var ErrRefreshReuseDetected = errors.New("refresh token reuse detected")
 
+const breakglassAdminAgentID = "fort-breakglass-admin"
+
 type Claims struct {
 	AgentID           string `json:"agent_id"`
 	Type              string `json:"type"`
@@ -85,6 +87,14 @@ func (m *Manager) Issue(agent model.Agent, ttl time.Duration, audience string) (
 		audience = "fort-api"
 	}
 	now := m.now()
+	if agent.ID == breakglassAdminAgentID {
+		if _, err := m.Store.RevokeActiveTokensForAgent(agent.ID, "breakglass_reissued", now); err != nil {
+			return "", model.TokenRecord{}, err
+		}
+		if _, err := m.Store.RevokeActiveRefreshSessionsForAgent(agent.ID, now); err != nil {
+			return "", model.TokenRecord{}, err
+		}
+	}
 	exp := now.Add(ttl)
 	jti, err := randomHex(16)
 	if err != nil {
@@ -133,6 +143,10 @@ func (m *Manager) OpenRefreshSession(agent model.Agent, accessTTL, refreshTTL ti
 	if audience == "" {
 		audience = "fort-api"
 	}
+	now := m.now()
+	if _, err := m.Store.RevokeActiveRefreshSessionsForAgent(agent.ID, now); err != nil {
+		return "", model.TokenRecord{}, model.RefreshSession{}, "", err
+	}
 	accessToken, rec, err := m.Issue(agent, accessTTL, audience)
 	if err != nil {
 		return "", model.TokenRecord{}, model.RefreshSession{}, "", err
@@ -145,7 +159,6 @@ func (m *Manager) OpenRefreshSession(agent model.Agent, accessTTL, refreshTTL ti
 	if err != nil {
 		return "", model.TokenRecord{}, model.RefreshSession{}, "", err
 	}
-	now := m.now()
 	session := model.RefreshSession{
 		ID:               sessionID,
 		AgentID:          agent.ID,

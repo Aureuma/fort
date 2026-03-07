@@ -301,3 +301,142 @@ func TestGetRefreshSessionByAnyTokenDetectsRotatedTokenReuse(t *testing.T) {
 		t.Fatalf("unexpected session id: %s", sess.ID)
 	}
 }
+
+func TestRevokeActiveRefreshSessionsForAgent(t *testing.T) {
+	st := newTestStore(t)
+	now := time.Now().UTC()
+	if _, err := st.CreateAgent("a1", model.AgentTypeWorkload, model.AgentStatusActive, now); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	if err := st.PutRefreshSession(model.RefreshSession{
+		ID:               "active-1",
+		AgentID:          "a1",
+		Audience:         "fort-api",
+		AccessTTLSeconds: 600,
+		RefreshTokenHash: hashRefreshToken("refresh-active-1"),
+		RefreshExpiresAt: now.Add(time.Hour),
+		CreatedAt:        now,
+		UpdatedAt:        now,
+	}); err != nil {
+		t.Fatalf("put active refresh session: %v", err)
+	}
+	if err := st.PutRefreshSession(model.RefreshSession{
+		ID:               "expired-1",
+		AgentID:          "a1",
+		Audience:         "fort-api",
+		AccessTTLSeconds: 600,
+		RefreshTokenHash: hashRefreshToken("refresh-expired-1"),
+		RefreshExpiresAt: now.Add(-time.Minute),
+		CreatedAt:        now,
+		UpdatedAt:        now,
+	}); err != nil {
+		t.Fatalf("put expired refresh session: %v", err)
+	}
+	if err := st.PutRefreshSession(model.RefreshSession{
+		ID:               "other-agent",
+		AgentID:          "a2",
+		Audience:         "fort-api",
+		AccessTTLSeconds: 600,
+		RefreshTokenHash: hashRefreshToken("refresh-other"),
+		RefreshExpiresAt: now.Add(time.Hour),
+		CreatedAt:        now,
+		UpdatedAt:        now,
+	}); err != nil {
+		t.Fatalf("put other agent refresh session: %v", err)
+	}
+
+	revoked, err := st.RevokeActiveRefreshSessionsForAgent("a1", now.Add(30*time.Second))
+	if err != nil {
+		t.Fatalf("revoke active refresh sessions: %v", err)
+	}
+	if revoked != 1 {
+		t.Fatalf("expected revoked count=1, got %d", revoked)
+	}
+
+	active, err := st.GetRefreshSession("active-1")
+	if err != nil {
+		t.Fatalf("get active session: %v", err)
+	}
+	if active.RevokedAt.IsZero() {
+		t.Fatalf("expected active session revoked")
+	}
+	expired, err := st.GetRefreshSession("expired-1")
+	if err != nil {
+		t.Fatalf("get expired session: %v", err)
+	}
+	if !expired.RevokedAt.IsZero() {
+		t.Fatalf("expected expired session unchanged")
+	}
+	other, err := st.GetRefreshSession("other-agent")
+	if err != nil {
+		t.Fatalf("get other session: %v", err)
+	}
+	if !other.RevokedAt.IsZero() {
+		t.Fatalf("expected other-agent session unchanged")
+	}
+}
+
+func TestRevokeActiveTokensForAgent(t *testing.T) {
+	st := newTestStore(t)
+	now := time.Now().UTC()
+	if _, err := st.CreateAgent("a1", model.AgentTypeWorkload, model.AgentStatusActive, now); err != nil {
+		t.Fatalf("create agent: %v", err)
+	}
+	if err := st.PutToken(model.TokenRecord{
+		JTI:       "active-token",
+		AgentID:   "a1",
+		Audience:  "fort-api",
+		IssuedAt:  now,
+		ExpiresAt: now.Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("put active token: %v", err)
+	}
+	if err := st.PutToken(model.TokenRecord{
+		JTI:       "expired-token",
+		AgentID:   "a1",
+		Audience:  "fort-api",
+		IssuedAt:  now.Add(-2 * time.Hour),
+		ExpiresAt: now.Add(-time.Minute),
+	}); err != nil {
+		t.Fatalf("put expired token: %v", err)
+	}
+	if err := st.PutToken(model.TokenRecord{
+		JTI:       "other-agent-token",
+		AgentID:   "a2",
+		Audience:  "fort-api",
+		IssuedAt:  now,
+		ExpiresAt: now.Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("put other agent token: %v", err)
+	}
+
+	revoked, err := st.RevokeActiveTokensForAgent("a1", "rotation", now.Add(time.Second))
+	if err != nil {
+		t.Fatalf("revoke active tokens: %v", err)
+	}
+	if revoked != 1 {
+		t.Fatalf("expected revoked count=1, got %d", revoked)
+	}
+
+	active, err := st.GetToken("active-token")
+	if err != nil {
+		t.Fatalf("get active token: %v", err)
+	}
+	if active.RevokedAt.IsZero() || active.Reason != "rotation" {
+		t.Fatalf("expected active token revoked with reason")
+	}
+	expired, err := st.GetToken("expired-token")
+	if err != nil {
+		t.Fatalf("get expired token: %v", err)
+	}
+	if !expired.RevokedAt.IsZero() {
+		t.Fatalf("expected expired token unchanged")
+	}
+	other, err := st.GetToken("other-agent-token")
+	if err != nil {
+		t.Fatalf("get other agent token: %v", err)
+	}
+	if !other.RevokedAt.IsZero() {
+		t.Fatalf("expected other-agent token unchanged")
+	}
+}

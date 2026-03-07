@@ -552,6 +552,39 @@ func (s *Store) RevokeToken(jti, reason string, now time.Time) (model.TokenRecor
 	return t, nil
 }
 
+func (s *Store) RevokeActiveTokensForAgent(agentID, reason string, now time.Time) (int, error) {
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		return 0, ErrInvalid
+	}
+	now = now.UTC()
+	reason = strings.TrimSpace(reason)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	revoked := 0
+	for jti, tok := range s.state.Tokens {
+		if tok.AgentID != agentID {
+			continue
+		}
+		if !tok.RevokedAt.IsZero() || now.After(tok.ExpiresAt) {
+			continue
+		}
+		tok.RevokedAt = now
+		tok.Reason = reason
+		s.state.Tokens[jti] = tok
+		revoked++
+	}
+	if revoked == 0 {
+		return 0, nil
+	}
+	if err := s.persistLocked(); err != nil {
+		return 0, err
+	}
+	return revoked, nil
+}
+
 func hashRefreshToken(token string) string {
 	sum := sha256.Sum256([]byte(strings.TrimSpace(token)))
 	return hex.EncodeToString(sum[:])
@@ -678,6 +711,38 @@ func (s *Store) RevokeRefreshSessionByToken(token string, now time.Time) (model.
 		return model.RefreshSession{}, err
 	}
 	return s.RevokeRefreshSession(sess.ID, now)
+}
+
+func (s *Store) RevokeActiveRefreshSessionsForAgent(agentID string, now time.Time) (int, error) {
+	agentID = strings.TrimSpace(agentID)
+	if agentID == "" {
+		return 0, ErrInvalid
+	}
+	now = now.UTC()
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	revoked := 0
+	for sessionID, sess := range s.state.RefreshSessions {
+		if sess.AgentID != agentID {
+			continue
+		}
+		if !sess.RevokedAt.IsZero() || now.After(sess.RefreshExpiresAt) {
+			continue
+		}
+		sess.RevokedAt = now
+		sess.UpdatedAt = now
+		s.state.RefreshSessions[sessionID] = sess
+		revoked++
+	}
+	if revoked == 0 {
+		return 0, nil
+	}
+	if err := s.persistLocked(); err != nil {
+		return 0, err
+	}
+	return revoked, nil
 }
 
 func (s *Store) PutSession(sess model.RunSession) error {
