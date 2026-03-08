@@ -45,6 +45,8 @@ Fort state is limited to:
 - `get/set/list/batch-get/run` operate against SI Vault ciphertext in `safe` (`encrypted:si-vault:`).
 - Fort does not maintain an independent secret store.
 - Per `repo/env` cryptographic material is resolved from the configured SI Vault keyring.
+- Keyring scope entries must resolve to one canonical SI Vault keypair across all scopes (anti-sprawl invariant).
+- The SI Vault keyring in this architecture is a file-backed JSON state (`~/.si/vault/si-vault-keyring.json` by default), not an OS keychain primitive.
 
 ## Deployment Contract
 - Fort is publicly routed through Viva.

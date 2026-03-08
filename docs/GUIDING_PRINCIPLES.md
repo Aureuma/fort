@@ -23,6 +23,8 @@ Fort is not a secret database. It must remain a thin API wrapper over SI Vault-b
 - Refresh tokens and signing keys are file-backed secrets.
 - Required file mode is `0600` (or stricter).
 - SI Vault ciphertext files (`safe/<repo>/.env.<env>`) are required to be regular files with `0600` (or stricter).
+- SI Vault keyring entries must converge on one canonical keypair across all `repo/env` scopes.
+- SI Vault keyring material is file-backed JSON state (default `~/.si/vault/si-vault-keyring.json`), not OS keychain storage.
 - Refresh tokens are not passed via environment variables.
 - Secret scope reads fail fast when `.env.<env>` or keyring scope material is missing.
 
@@ -38,3 +40,50 @@ Fort is not a secret database. It must remain a thin API wrapper over SI Vault-b
 - Fort-owned secret persistence
 - alternate auth backdoors
 - shadow vault formats or private secret stores outside SI Vault
+
+## Unified Contract
+
+### Scope Boundaries
+- SI Vault owns local `.env` encryption/decryption format and key material lifecycle.
+- Fort owns remote authentication/authorization and policy enforcement.
+- Sun is not part of SI Vault/Fort secret read-write flows.
+
+### Secret Data Plane
+- Source of truth for secrets: `safe/<repo>/.env.<env>`.
+- Ciphertext format: `encrypted:si-vault:...` (legacy `encrypted:` accepted for compatibility).
+- Fort `get/set/list/batch-get/run` resolves directly against SI Vault-backed `safe` files.
+
+### Key Material Model
+- SI Vault key material registry: `~/.si/vault/si-vault-keyring.json` (or `SI_VAULT_KEYRING_FILE`).
+- This keyring is file-backed JSON state, not OS keychain storage.
+- One canonical keypair is enforced across all `repo/env` keyring scopes.
+- `backup_private_keys` sprawl is disallowed.
+
+### Runtime Access Model
+- Runtime containers (Codex/Dyad) access secrets through `si fort ...`.
+- Direct local `si vault` secret commands are blocked in SI runtime containers.
+- Host/admin operations may use `si vault` for local maintenance workflows.
+
+### Token & Session Security
+- Access tokens are short-lived JWT bearer tokens.
+- Refresh sessions use rotating opaque refresh tokens with reuse detection.
+- Single active refresh session per agent.
+- Refresh and signing secrets are file-backed only (`0600`), not env-injected secret values.
+
+### File/Permission Invariants
+- `safe/<repo>/.env.<env>`: regular file, `0600` or stricter.
+- `~/.si/vault/si-vault-keyring.json`: `0600`.
+- `~/.si/vault/keys/age.key` (if file backend): `0600`.
+- Fort refresh token and signing key files: `0600`.
+
+### Deployment Invariants
+- Hosted Fort endpoint is configured in `~/.si/fort/settings.toml` (`[fort].host` / `container_host`).
+- Public endpoint must be HTTPS.
+- Fort deploy path is via Viva manifests, not ad-hoc local-only exposure.
+
+### Regression Definition
+- auth bypass or hidden bootstrap path
+- Fort-owned secret persistence
+- env-injected refresh/JWT signing secrets
+- SI Vault keypair sprawl across scopes
+- Sun coupling reintroduced into SI Vault/Fort secret path

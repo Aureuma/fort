@@ -2,7 +2,8 @@
 
 `fort` is the SI policy/authentication API for SI Vault operations.
 
-See also: `docs/GUIDING_PRINCIPLES.md`
+See also:
+- `docs/GUIDING_PRINCIPLES.md`
 
 ## Components
 - `fortd`: HTTP API server
@@ -28,6 +29,7 @@ Fort does not:
 - Workloads authenticate with short-lived access tokens and rotating refresh sessions.
 - Refresh and signing secrets are file-backed and strict-permissioned (`0600`), never env-injected secret values.
 - SI Vault ciphertext files (`safe/<repo>/.env.<env>`) must be regular files with `0600` (or stricter).
+- SI Vault keyring material is file-backed JSON state (`~/.si/vault/si-vault-keyring.json` by default), not OS keychain storage.
 - Provisioning is explicit and authenticated; there is no hidden bootstrap bypass path.
 
 ## Auth & Session Security
