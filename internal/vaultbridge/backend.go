@@ -20,6 +20,7 @@ const encryptedPrefix = "encrypted:si-vault:"
 var (
 	ErrNotFound = errors.New("not found")
 	ErrInvalid  = errors.New("invalid")
+	ErrKeySprawl = errors.New("key sprawl detected")
 )
 
 type Config struct {
@@ -214,6 +215,9 @@ func (b *Backend) loadKeyringEntry(repo, env string) (keyringEntry, error) {
 	if err := json.Unmarshal(raw, &doc); err != nil {
 		return keyringEntry{}, err
 	}
+	if err := b.validateSingleKeyMaterial(doc); err != nil {
+		return keyringEntry{}, err
+	}
 	if doc.Entries == nil {
 		return keyringEntry{}, ErrNotFound
 	}
@@ -232,6 +236,61 @@ func (b *Backend) loadKeyringEntry(repo, env string) (keyringEntry, error) {
 		return keyringEntry{}, ErrNotFound
 	}
 	return entry, nil
+}
+
+func normalizeHex(raw string) string {
+	return strings.TrimSpace(strings.ToLower(raw))
+}
+
+// validateSingleKeyMaterial enforces a single keypair across the keyring
+// to prevent key sprawl between repo/env scopes.
+func (b *Backend) validateSingleKeyMaterial(doc keyringDoc) error {
+	if len(doc.Entries) == 0 {
+		return nil
+	}
+
+	expectedPub := ""
+	expectedPriv := ""
+
+	for scope, entry := range doc.Entries {
+		pub := normalizeHex(entry.PublicKey)
+		priv := normalizeHex(entry.PrivateKey)
+		if pub == "" && priv == "" {
+			continue
+		}
+		if pub == "" || priv == "" {
+			return fmt.Errorf("%w: %s has incomplete keypair", ErrInvalid, scope)
+		}
+
+		for _, backup := range entry.BackupPrivateKeys {
+			if normalizeHex(backup) != "" {
+				return fmt.Errorf("%w: %s declares backup_private_keys", ErrKeySprawl, scope)
+			}
+		}
+
+		if expectedPub == "" {
+			expectedPub = pub
+			expectedPriv = priv
+			continue
+		}
+		if pub != expectedPub || priv != expectedPriv {
+			return fmt.Errorf("%w: %s uses a different keypair", ErrKeySprawl, scope)
+		}
+	}
+
+	if expectedPriv == "" {
+		return nil
+	}
+	for _, extra := range b.extraPrivKeys {
+		extra = normalizeHex(extra)
+		if extra == "" {
+			continue
+		}
+		if extra != expectedPriv {
+			return fmt.Errorf("%w: configured extra private key does not match canonical key", ErrKeySprawl)
+		}
+	}
+	return nil
 }
 
 func encryptValue(plain, publicKeyHex string) (string, error) {

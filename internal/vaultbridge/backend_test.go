@@ -141,3 +141,108 @@ func TestListRejectsBroadEnvFilePermissions(t *testing.T) {
 		t.Fatalf("expected strict permission error, got %v", err)
 	}
 }
+
+func TestLoadKeyringEntryRejectsKeypairSprawl(t *testing.T) {
+	tmp := t.TempDir()
+	safeRoot := filepath.Join(tmp, "safe-root")
+	keyring := filepath.Join(tmp, "keyring.json")
+	writeKeyring(t, keyring, map[string]any{
+		"safe/dev": map[string]any{
+			"repo":        "safe",
+			"env":         "dev",
+			"public_key":  "03aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			"private_key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		},
+		"safe/prod": map[string]any{
+			"repo":        "safe",
+			"env":         "prod",
+			"public_key":  "03bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+			"private_key": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+		},
+	})
+	backend, err := New(Config{SafeRoot: safeRoot, KeyringPath: keyring})
+	if err != nil {
+		t.Fatalf("new backend: %v", err)
+	}
+	if _, err := backend.loadKeyringEntry("safe", "dev"); !errors.Is(err, ErrKeySprawl) {
+		t.Fatalf("expected ErrKeySprawl, got %v", err)
+	}
+}
+
+func TestLoadKeyringEntryRejectsBackupPrivateKeys(t *testing.T) {
+	tmp := t.TempDir()
+	safeRoot := filepath.Join(tmp, "safe-root")
+	keyring := filepath.Join(tmp, "keyring.json")
+	writeKeyring(t, keyring, map[string]any{
+		"safe/dev": map[string]any{
+			"repo":                "safe",
+			"env":                 "dev",
+			"public_key":          "03aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			"private_key":         "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			"backup_private_keys": []string{"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+		},
+	})
+	backend, err := New(Config{SafeRoot: safeRoot, KeyringPath: keyring})
+	if err != nil {
+		t.Fatalf("new backend: %v", err)
+	}
+	if _, err := backend.loadKeyringEntry("safe", "dev"); !errors.Is(err, ErrKeySprawl) {
+		t.Fatalf("expected ErrKeySprawl, got %v", err)
+	}
+}
+
+func TestLoadKeyringEntryAllowsSingleCanonicalKeypair(t *testing.T) {
+	tmp := t.TempDir()
+	safeRoot := filepath.Join(tmp, "safe-root")
+	keyring := filepath.Join(tmp, "keyring.json")
+	writeKeyring(t, keyring, map[string]any{
+		"safe/dev": map[string]any{
+			"repo":        "safe",
+			"env":         "dev",
+			"public_key":  "03aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			"private_key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		},
+		"safe/prod": map[string]any{
+			"repo":        "safe",
+			"env":         "prod",
+			"public_key":  "03aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			"private_key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		},
+	})
+	backend, err := New(Config{SafeRoot: safeRoot, KeyringPath: keyring})
+	if err != nil {
+		t.Fatalf("new backend: %v", err)
+	}
+	entry, err := backend.loadKeyringEntry("safe", "prod")
+	if err != nil {
+		t.Fatalf("loadKeyringEntry: %v", err)
+	}
+	if got := strings.TrimSpace(entry.PublicKey); got == "" {
+		t.Fatalf("expected populated public key")
+	}
+}
+
+func TestLoadKeyringEntryRejectsMismatchedExtraPrivateKey(t *testing.T) {
+	tmp := t.TempDir()
+	safeRoot := filepath.Join(tmp, "safe-root")
+	keyring := filepath.Join(tmp, "keyring.json")
+	writeKeyring(t, keyring, map[string]any{
+		"safe/dev": map[string]any{
+			"repo":        "safe",
+			"env":         "dev",
+			"public_key":  "03aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+			"private_key": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+		},
+	})
+	backend, err := New(Config{
+		SafeRoot:      safeRoot,
+		KeyringPath:   keyring,
+		ExtraPrivKeys: []string{"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"},
+	})
+	if err != nil {
+		t.Fatalf("new backend: %v", err)
+	}
+	if _, err := backend.loadKeyringEntry("safe", "dev"); !errors.Is(err, ErrKeySprawl) {
+		t.Fatalf("expected ErrKeySprawl, got %v", err)
+	}
+}
