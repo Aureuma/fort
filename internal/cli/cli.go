@@ -56,6 +56,10 @@ func run(args []string) error {
 	jsonOut := fs.Bool("json", false, "output JSON")
 	timeout := fs.Duration("timeout", durationEnv("FORT_TIMEOUT", 15*time.Second), "request timeout")
 	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			printTextf("%s\n", usageTextRoot())
+			return nil
+		}
 		return usageRoot()
 	}
 	rest := fs.Args()
@@ -77,6 +81,9 @@ func run(args []string) error {
 	cmd := strings.TrimSpace(rest[0])
 	args = rest[1:]
 	switch cmd {
+	case "help", "-h", "--help":
+		printTextf("%s\n", usageTextRoot())
+		return nil
 	case "doctor":
 		return client.cmdDoctor(args)
 	case "version":
@@ -101,7 +108,17 @@ func run(args []string) error {
 }
 
 func usageRoot() error {
-	return errors.New(`usage: fort [--host URL] [--token TOKEN] [--json] <command> [args]
+	return errors.New(usageTextRoot())
+}
+
+func usageTextRoot() string {
+	return `usage: fort [--host URL] [--token TOKEN] [--json] [--timeout DURATION] <command> [args]
+
+global flags:
+  --host URL         Fort API host (fallback: FORT_HOST, then ~/.si/fort/settings.toml [fort].host)
+  --token TOKEN      bearer token (fallback: FORT_TOKEN)
+  --json             output JSON where supported
+  --timeout DURATION request timeout (default: 15s; env: FORT_TIMEOUT)
 
 commands:
   doctor
@@ -112,7 +129,12 @@ commands:
   list
   batch-get
   run
-  agent create|get|list|set-status|rotate|remove|policy`)
+  agent create|get|list|set-status|rotate|remove|policy
+
+notes:
+  - auth issue/list/revoke and auth session open require an admin token.
+  - auth session refresh/close support file-backed refresh-token flows.
+  - in SI runtime containers, prefer "si fort ..." so token-path refresh is handled by SI.`
 }
 
 func envOr(name, fallback string) string {

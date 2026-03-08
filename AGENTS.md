@@ -57,6 +57,10 @@ Fort state is limited to:
   - `FORT_VAULT_KEYRING_FILE`
   - `FORT_JWT_SIGNING_KEY_FILE`
   - workload refresh-token file paths used by `fort-agent`
+- SI wrapper contract:
+  - bootstrap/admin auth file: `FORT_TOKEN_FILE` (or `FORT_TOKEN`)
+  - runtime session files: `FORT_TOKEN_PATH`, `FORT_REFRESH_TOKEN_PATH`
+  - pass native `fort` flags after `--` when invoking via `si fort`
 
 ## Regression Policy
 Treat the following as regressions:

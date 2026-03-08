@@ -63,12 +63,15 @@ Fort is not a secret database. It must remain a thin API wrapper over SI Vault-b
 - Runtime containers (Codex/Dyad) access secrets through `si fort ...`.
 - Direct local `si vault` secret commands are blocked in SI runtime containers.
 - Host/admin operations may use `si vault` for local maintenance workflows.
+- SI wrapper bootstrap/admin auth resolves from `FORT_TOKEN` or `FORT_TOKEN_FILE`.
+- SI runtime sessions resolve from file paths `FORT_TOKEN_PATH` and `FORT_REFRESH_TOKEN_PATH`.
 
 ### Token & Session Security
 - Access tokens are short-lived JWT bearer tokens.
 - Refresh sessions use rotating opaque refresh tokens with reuse detection.
 - Single active refresh session per agent.
 - Refresh and signing secrets are file-backed only (`0600`), not env-injected secret values.
+- For `si fort` wrapper calls, native `fort` flags should be passed after `--`.
 
 ### File/Permission Invariants
 - `safe/<repo>/.env.<env>`: regular file, `0600` or stricter.

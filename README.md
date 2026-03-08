@@ -65,6 +65,7 @@ export FORT_VAULT_KEYRING_FILE=$HOME/.si/vault/si-vault-keyring.json
 
 ## CLI
 ```bash
+fort -h
 fort doctor
 fort version
 fort auth issue|login|whoami|list|revoke
@@ -84,6 +85,21 @@ CLI host resolution order:
 3. `~/.si/fort/settings.toml` `[fort].host` (or `~/.si/settings.toml` `[fort].host`)
 
 `fort run` performs `open -> materialize -> close` session flow.
+
+CLI token sources:
+1. `--token`
+2. `FORT_TOKEN`
+
+For SI runtime containers, prefer the `si fort ...` wrapper path:
+- SI reads `FORT_TOKEN_PATH` / `FORT_REFRESH_TOKEN_PATH` file state
+- SI refreshes as needed
+- SI injects `--token` for each `fort` call
+
+When invoking `fort` flags through the SI wrapper, pass native `fort` flags after `--`:
+
+```bash
+si fort -- --host https://fort.aureuma.ai doctor
+```
 
 ## Refresh Token Handling (File-Only)
 - Do not pass refresh tokens via environment variables.
