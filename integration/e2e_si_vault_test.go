@@ -114,8 +114,8 @@ func TestFortE2ESIVault(t *testing.T) {
 	if siGot != fortGot {
 		t.Fatalf("si vault get mismatch: si=%q fort=%q", siGot, fortGot)
 	}
-	runCmd(t, siRepo, []string{envKV("SI_VAULT_KEYRING_FILE", keyringFile)}, "go", "run", "./tools/si", "vault", "set", "SI_TO_FORT", "from-si", "--repo", "safe", "--env", "dev", "--env-file", envFile)
-	fromSi := runCmd(t, "", nil, fortClient, "--host", fortBase, "--token", accessToken, "get", "--repo", "safe", "--env", "dev", "--key", "SI_TO_FORT", "--format", "raw")
+	runCmd(t, siRepo, []string{envKV("SI_VAULT_KEYRING_FILE", keyringFile)}, "go", "run", "./tools/si", "vault", "set", "E2E_SI_FORT_BRIDGE", "from-si", "--repo", "safe", "--env", "dev", "--env-file", envFile)
+	fromSi := runCmd(t, "", nil, fortClient, "--host", fortBase, "--token", accessToken, "get", "--repo", "safe", "--env", "dev", "--key", "E2E_SI_FORT_BRIDGE", "--format", "raw")
 	if fromSi != "from-si" {
 		t.Fatalf("fort get from si set value mismatch: %q", fromSi)
 	}
@@ -123,7 +123,7 @@ func TestFortE2ESIVault(t *testing.T) {
 	siFortGot := runCmd(t, siRepo, []string{
 		envKV("FORT_HOST", fortBase),
 		envKV("FORT_TOKEN", accessToken),
-	}, "go", "run", "./tools/si", "fort", "--repo", fortRepo, "--bin", fortClient, "get", "--repo", "safe", "--env", "dev", "--key", "SI_TO_FORT", "--format", "raw")
+	}, "go", "run", "./tools/si", "fort", "--repo", fortRepo, "--bin", fortClient, "get", "--repo", "safe", "--env", "dev", "--key", "E2E_SI_FORT_BRIDGE", "--format", "raw")
 	if siFortGot != fromSi {
 		t.Fatalf("si fort wrapper mismatch: si=%q fort=%q", siFortGot, fromSi)
 	}
