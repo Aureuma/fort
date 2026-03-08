@@ -48,7 +48,7 @@ func floatEnv(name string, fallback float64) float64 {
 
 func main() {
 	fs := flag.NewFlagSet("fort-agent", flag.ExitOnError)
-	host := fs.String("host", envOr("FORT_HOST", "https://fort.aureuma.com"), "fort API host")
+	host := fs.String("host", envOr("FORT_HOST", "https://fort.aureuma.ai"), "fort API host")
 	refreshTokenFile := fs.String("refresh-token-file", envOr("FORT_REFRESH_TOKEN_FILE", ""), "path to refresh token file (0600)")
 	tokenPath := fs.String("token-path", envOr("FORT_TOKEN_PATH", "/tmp/fort/access.token"), "access token output path")
 	refreshRatio := fs.Float64("refresh-ratio", floatEnv("FORT_AGENT_REFRESH_RATIO", 0.70), "refresh ratio for access token lifetime")

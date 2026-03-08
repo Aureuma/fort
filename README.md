@@ -76,7 +76,7 @@ fort agent create|get|list|set-status|rotate|remove
 fort agent policy get|set|add|remove|check
 ```
 
-CLI default host: `https://fort.aureuma.com` (override with `--host` or `FORT_HOST`).
+CLI default host: `https://fort.aureuma.ai` (override with `--host` or `FORT_HOST`).
 
 `fort run` performs `open -> materialize -> close` session flow.
 

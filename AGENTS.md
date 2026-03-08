@@ -48,7 +48,7 @@ Fort state is limited to:
 
 ## Deployment Contract
 - Fort is publicly routed through Viva.
-- Public HTTPS endpoint is `https://fort.aureuma.com`.
+- Public HTTPS endpoint is `https://fort.aureuma.ai`.
 - Runtime mounts must include:
   - `FORT_STATE_PATH`
   - `FORT_SAFE_ROOT`

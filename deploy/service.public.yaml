@@ -5,7 +5,7 @@ meta:
     app_code: fort
 router:
   mode: traefik-file
-  domain: fort.aureuma.com
+  domain: fort.aureuma.ai
   entrypoints:
     - websecure
   tls: true
