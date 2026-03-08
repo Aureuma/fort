@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"fort/internal/hostcfg"
 	"fort/internal/model"
 )
 
@@ -46,7 +47,11 @@ func Run() error {
 func run(args []string) error {
 	fs := flag.NewFlagSet("fort", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	host := fs.String("host", envOr("FORT_HOST", "https://fort.aureuma.ai"), "fort API host")
+	hostDefault := strings.TrimSpace(os.Getenv("FORT_HOST"))
+	if hostDefault == "" {
+		hostDefault = hostcfg.HostFromSettings()
+	}
+	host := fs.String("host", hostDefault, "fort API host")
 	token := fs.String("token", envOr("FORT_TOKEN", ""), "bearer token")
 	jsonOut := fs.Bool("json", false, "output JSON")
 	timeout := fs.Duration("timeout", durationEnv("FORT_TIMEOUT", 15*time.Second), "request timeout")
@@ -64,6 +69,9 @@ func run(args []string) error {
 		JSON:    *jsonOut,
 		Timeout: *timeout,
 		http:    &http.Client{Timeout: *timeout},
+	}
+	if strings.TrimSpace(client.Host) == "" {
+		return errors.New("fort host is required (set FORT_HOST or ~/.si/fort/settings.toml [fort].host)")
 	}
 
 	cmd := strings.TrimSpace(rest[0])

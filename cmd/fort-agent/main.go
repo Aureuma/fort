@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"fort/internal/agent"
+	"fort/internal/hostcfg"
 )
 
 func envOr(name, fallback string) string {
@@ -48,7 +49,11 @@ func floatEnv(name string, fallback float64) float64 {
 
 func main() {
 	fs := flag.NewFlagSet("fort-agent", flag.ExitOnError)
-	host := fs.String("host", envOr("FORT_HOST", "https://fort.aureuma.ai"), "fort API host")
+	hostDefault := strings.TrimSpace(os.Getenv("FORT_HOST"))
+	if hostDefault == "" {
+		hostDefault = hostcfg.HostFromSettings()
+	}
+	host := fs.String("host", hostDefault, "fort API host")
 	refreshTokenFile := fs.String("refresh-token-file", envOr("FORT_REFRESH_TOKEN_FILE", ""), "path to refresh token file (0600)")
 	tokenPath := fs.String("token-path", envOr("FORT_TOKEN_PATH", "/tmp/fort/access.token"), "access token output path")
 	refreshRatio := fs.Float64("refresh-ratio", floatEnv("FORT_AGENT_REFRESH_RATIO", 0.70), "refresh ratio for access token lifetime")
@@ -58,6 +63,9 @@ func main() {
 	httpTimeout := fs.Duration("http-timeout", durationEnv("FORT_AGENT_HTTP_TIMEOUT", 10*time.Second), "HTTP timeout")
 	once := fs.Bool("once", false, "refresh once then exit")
 	fs.Parse(os.Args[1:])
+	if strings.TrimSpace(*host) == "" {
+		log.Fatalf("config: fort host is required (set FORT_HOST or ~/.si/fort/settings.toml [fort].host)")
+	}
 
 	rt, err := agent.New(agent.Config{
 		Host:             *host,
