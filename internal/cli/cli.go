@@ -63,6 +63,9 @@ func run(args []string) error {
 		}
 		return usageRoot()
 	}
+	if err := rejectDeprecatedTokenValueEnv(); err != nil {
+		return err
+	}
 	rest := fs.Args()
 	if len(rest) == 0 {
 		return usageRoot()
@@ -124,7 +127,7 @@ func usageTextRoot() string {
 
 global flags:
   --host URL         Fort API host (fallback: FORT_HOST, then ~/.si/fort/settings.toml [fort].host)
-  --token-file PATH  bearer token file (0600; fallback: FORT_TOKEN_PATH, then FORT_TOKEN_FILE)
+  --token-file PATH  bearer token file (0600; fallback: FORT_TOKEN_PATH, then FORT_BOOTSTRAP_TOKEN_FILE)
   --json             output JSON where supported
   --timeout DURATION request timeout (default: 15s; env: FORT_TIMEOUT)
 
@@ -157,7 +160,20 @@ func defaultTokenFile() string {
 	if v := strings.TrimSpace(os.Getenv("FORT_TOKEN_PATH")); v != "" {
 		return v
 	}
+	if v := strings.TrimSpace(os.Getenv("FORT_BOOTSTRAP_TOKEN_FILE")); v != "" {
+		return v
+	}
 	return strings.TrimSpace(os.Getenv("FORT_TOKEN_FILE"))
+}
+
+func rejectDeprecatedTokenValueEnv() error {
+	if strings.TrimSpace(os.Getenv("FORT_TOKEN")) != "" {
+		return errors.New("FORT_TOKEN is deprecated and disallowed; use file-based auth (FORT_TOKEN_PATH or FORT_BOOTSTRAP_TOKEN_FILE)")
+	}
+	if strings.TrimSpace(os.Getenv("FORT_REFRESH_TOKEN")) != "" {
+		return errors.New("FORT_REFRESH_TOKEN is deprecated and disallowed; use file-based auth (FORT_REFRESH_TOKEN_PATH)")
+	}
+	return nil
 }
 
 func durationEnv(name string, fallback time.Duration) time.Duration {
@@ -184,6 +200,8 @@ func sanitizeChildEnv(env []string) []string {
 		case strings.HasPrefix(entry, "FORT_REFRESH_TOKEN="):
 			continue
 		case strings.HasPrefix(entry, "FORT_TOKEN_FILE="):
+			continue
+		case strings.HasPrefix(entry, "FORT_BOOTSTRAP_TOKEN_FILE="):
 			continue
 		case strings.HasPrefix(entry, "FORT_TOKEN_PATH="):
 			continue
@@ -374,7 +392,7 @@ func (c *Client) cmdAuth(args []string) error {
 		}
 		useToken := c.Token != ""
 		if !useToken {
-			return errors.New("auth issue requires admin token file auth (--token-file or FORT_TOKEN_PATH/FORT_TOKEN_FILE)")
+			return errors.New("auth issue requires admin token file auth (--token-file or FORT_TOKEN_PATH/FORT_BOOTSTRAP_TOKEN_FILE)")
 		}
 		status, resp, err := c.apiRequest(http.MethodPost, "/v1/auth/token", body, useToken)
 		if err != nil {
@@ -426,7 +444,7 @@ func (c *Client) cmdAuth(args []string) error {
 		}
 		useToken := c.Token != ""
 		if !useToken {
-			return errors.New("auth list requires admin token file auth (--token-file or FORT_TOKEN_PATH/FORT_TOKEN_FILE)")
+			return errors.New("auth list requires admin token file auth (--token-file or FORT_TOKEN_PATH/FORT_BOOTSTRAP_TOKEN_FILE)")
 		}
 		status, resp, err := c.apiRequest(http.MethodGet, "/v1/auth/list"+q, nil, useToken)
 		if err != nil {
@@ -453,7 +471,7 @@ func (c *Client) cmdAuth(args []string) error {
 		}
 		useToken := c.Token != ""
 		if !useToken {
-			return errors.New("auth revoke requires admin token file auth (--token-file or FORT_TOKEN_PATH/FORT_TOKEN_FILE)")
+			return errors.New("auth revoke requires admin token file auth (--token-file or FORT_TOKEN_PATH/FORT_BOOTSTRAP_TOKEN_FILE)")
 		}
 		status, resp, err := c.apiRequest(http.MethodPost, "/v1/auth/revoke", map[string]any{"jti": *jti, "reason": *reason}, useToken)
 		if err != nil {
@@ -506,7 +524,7 @@ func (c *Client) cmdAuthSession(args []string) error {
 		}
 		useToken := c.Token != ""
 		if !useToken {
-			return errors.New("auth session open requires admin token file auth (--token-file or FORT_TOKEN_PATH/FORT_TOKEN_FILE)")
+			return errors.New("auth session open requires admin token file auth (--token-file or FORT_TOKEN_PATH/FORT_BOOTSTRAP_TOKEN_FILE)")
 		}
 		status, resp, err := c.apiRequest(http.MethodPost, "/v1/auth/session/open", body, useToken)
 		if err != nil {

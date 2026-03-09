@@ -89,7 +89,11 @@ CLI host resolution order:
 CLI token sources:
 1. `--token-file`
 2. `FORT_TOKEN_PATH`
-3. `FORT_TOKEN_FILE`
+3. `FORT_BOOTSTRAP_TOKEN_FILE`
+
+Deprecated token-value env vars are disallowed:
+- `FORT_TOKEN`
+- `FORT_REFRESH_TOKEN`
 
 For SI runtime containers, prefer the `si fort ...` wrapper path:
 - SI reads `FORT_TOKEN_PATH` / `FORT_REFRESH_TOKEN_PATH` file state
