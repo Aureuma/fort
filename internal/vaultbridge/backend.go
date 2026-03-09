@@ -18,8 +18,8 @@ import (
 const encryptedPrefix = "encrypted:si-vault:"
 
 var (
-	ErrNotFound = errors.New("not found")
-	ErrInvalid  = errors.New("invalid")
+	ErrNotFound  = errors.New("not found")
+	ErrInvalid   = errors.New("invalid")
 	ErrKeySprawl = errors.New("key sprawl detected")
 )
 
@@ -206,7 +206,24 @@ func statOwner(path string) (int, int, bool) {
 	return int(stat.Uid), int(stat.Gid), true
 }
 
+func ensureStrictSecretFile(path string) error {
+	info, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("secret file path must be a regular file")
+	}
+	if info.Mode().Perm()&0o077 != 0 {
+		return fmt.Errorf("secret file permissions must be 0600 or stricter")
+	}
+	return nil
+}
+
 func (b *Backend) loadKeyringEntry(repo, env string) (keyringEntry, error) {
+	if err := ensureStrictSecretFile(b.keyringPath); err != nil {
+		return keyringEntry{}, err
+	}
 	raw, err := os.ReadFile(b.keyringPath)
 	if err != nil {
 		return keyringEntry{}, err

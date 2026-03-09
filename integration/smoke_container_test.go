@@ -30,6 +30,9 @@ func TestFortSmokeContainer(t *testing.T) {
 	keyringPath := filepath.Join(stateDir, "si-vault-keyring.json")
 	signingKeyPath := filepath.Join(stateDir, "jwt-signing.key")
 	adminToken := seedFortStateForE2E(t, statePath, keyringPath, signingKeyPath, "smoke-signing-key-0123456789012345", "safe", "prod")
+	adminTokenFileOnHost := filepath.Join(stateDir, "admin.token")
+	writeFile(t, adminTokenFileOnHost, []byte(adminToken), 0o600)
+	adminTokenFileInContainer := "/var/lib/fort/admin.token"
 
 	buildGoBinary(t, fortRepo, filepath.Join(fortRepo, ".dist", "fort"), "./cmd/fort")
 	buildGoBinary(t, fortRepo, filepath.Join(fortRepo, ".dist", "fortd"), "./cmd/fortd")
@@ -65,18 +68,18 @@ func TestFortSmokeContainer(t *testing.T) {
 		return cmd.Run()
 	}, "fort smoke container ready")
 
-	containerFort := func(token string, args ...string) string {
+	containerFort := func(tokenFile string, args ...string) string {
 		cmdArgs := []string{"exec", containerName, "/usr/local/bin/fort", "--host", "http://127.0.0.1:8088"}
-		if strings.TrimSpace(token) != "" {
-			cmdArgs = append(cmdArgs, "--token", token)
+		if strings.TrimSpace(tokenFile) != "" {
+			cmdArgs = append(cmdArgs, "--token-file", tokenFile)
 		}
 		cmdArgs = append(cmdArgs, args...)
 		return runCmd(t, "", nil, "docker", cmdArgs...)
 	}
-	containerFort(adminToken, "agent", "create", "--id", "workload-a", "--type", "workload")
-	containerFort(adminToken, "agent", "policy", "set", "--id", "workload-a", "--bind", "safe:prod:get,run,list,set")
+	containerFort(adminTokenFileInContainer, "agent", "create", "--id", "workload-a", "--type", "workload")
+	containerFort(adminTokenFileInContainer, "agent", "policy", "set", "--id", "workload-a", "--bind", "safe:prod:get,run,list,set")
 	refreshFileInContainer := "/var/lib/fort/workload-a.refresh.token"
-	containerFort(adminToken, "auth", "session", "open", "--agent", "workload-a", "--access-ttl", "5m", "--refresh-ttl", "30m", "--refresh-token-out", refreshFileInContainer)
+	containerFort(adminTokenFileInContainer, "auth", "session", "open", "--agent", "workload-a", "--access-ttl", "5m", "--refresh-ttl", "30m", "--refresh-token-out", refreshFileInContainer)
 	refreshFileOnHost := filepath.Join(stateDir, "workload-a.refresh.token")
 	info, err := os.Stat(refreshFileOnHost)
 	if err != nil {
@@ -92,6 +95,6 @@ func TestFortSmokeContainer(t *testing.T) {
 		"-v", refreshFileOnHost+":/run/secrets/fort.refresh:ro",
 		"-e", "FORT_HOST=http://"+containerName+":8088",
 		imageTag,
-		"-lc", "mkdir -p /tmp/fort && cp /run/secrets/fort.refresh /tmp/fort/refresh.token && chmod 600 /tmp/fort/refresh.token && /usr/local/bin/fort-agent --once --refresh-token-file /tmp/fort/refresh.token --token-path /tmp/fort/access.token >/dev/null && TOKEN=\"$(cat /tmp/fort/access.token)\" && /usr/local/bin/fort --json --host \"$FORT_HOST\" --token \"$TOKEN\" auth whoami")
+		"-lc", "mkdir -p /tmp/fort && cp /run/secrets/fort.refresh /tmp/fort/refresh.token && chmod 600 /tmp/fort/refresh.token && /usr/local/bin/fort-agent --once --refresh-token-file /tmp/fort/refresh.token --token-path /tmp/fort/access.token >/dev/null && /usr/local/bin/fort --json --host \"$FORT_HOST\" --token-file /tmp/fort/access.token auth whoami")
 	mustJSONContains(t, whoami, "\"id\": \"workload-a\"", "whoami output")
 }

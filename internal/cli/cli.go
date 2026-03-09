@@ -22,11 +22,12 @@ import (
 const version = "dev"
 
 type Client struct {
-	Host    string
-	Token   string
-	JSON    bool
-	Timeout time.Duration
-	http    *http.Client
+	Host      string
+	Token     string
+	TokenFile string
+	JSON      bool
+	Timeout   time.Duration
+	http      *http.Client
 }
 
 type stringSliceFlag []string
@@ -52,7 +53,7 @@ func run(args []string) error {
 		hostDefault = hostcfg.HostFromSettings()
 	}
 	host := fs.String("host", hostDefault, "fort API host")
-	token := fs.String("token", envOr("FORT_TOKEN", ""), "bearer token")
+	tokenFile := fs.String("token-file", defaultTokenFile(), "path to bearer token file (0600)")
 	jsonOut := fs.Bool("json", false, "output JSON")
 	timeout := fs.Duration("timeout", durationEnv("FORT_TIMEOUT", 15*time.Second), "request timeout")
 	if err := fs.Parse(args); err != nil {
@@ -68,11 +69,18 @@ func run(args []string) error {
 	}
 
 	client := &Client{
-		Host:    strings.TrimRight(strings.TrimSpace(*host), "/"),
-		Token:   strings.TrimSpace(*token),
-		JSON:    *jsonOut,
-		Timeout: *timeout,
-		http:    &http.Client{Timeout: *timeout},
+		Host:      strings.TrimRight(strings.TrimSpace(*host), "/"),
+		TokenFile: strings.TrimSpace(*tokenFile),
+		JSON:      *jsonOut,
+		Timeout:   *timeout,
+		http:      &http.Client{Timeout: *timeout},
+	}
+	if client.TokenFile != "" {
+		value, err := readSecretFile(client.TokenFile)
+		if err != nil {
+			return fmt.Errorf("read token file: %w", err)
+		}
+		client.Token = strings.TrimSpace(value)
 	}
 	if strings.TrimSpace(client.Host) == "" {
 		return errors.New("fort host is required (set FORT_HOST or ~/.si/fort/settings.toml [fort].host)")
@@ -112,11 +120,11 @@ func usageRoot() error {
 }
 
 func usageTextRoot() string {
-	return `usage: fort [--host URL] [--token TOKEN] [--json] [--timeout DURATION] <command> [args]
+	return `usage: fort [--host URL] [--token-file PATH] [--json] [--timeout DURATION] <command> [args]
 
 global flags:
   --host URL         Fort API host (fallback: FORT_HOST, then ~/.si/fort/settings.toml [fort].host)
-  --token TOKEN      bearer token (fallback: FORT_TOKEN)
+  --token-file PATH  bearer token file (0600; fallback: FORT_TOKEN_PATH, then FORT_TOKEN_FILE)
   --json             output JSON where supported
   --timeout DURATION request timeout (default: 15s; env: FORT_TIMEOUT)
 
@@ -145,6 +153,13 @@ func envOr(name, fallback string) string {
 	return v
 }
 
+func defaultTokenFile() string {
+	if v := strings.TrimSpace(os.Getenv("FORT_TOKEN_PATH")); v != "" {
+		return v
+	}
+	return strings.TrimSpace(os.Getenv("FORT_TOKEN_FILE"))
+}
+
 func durationEnv(name string, fallback time.Duration) time.Duration {
 	v := strings.TrimSpace(os.Getenv(name))
 	if v == "" {
@@ -155,6 +170,29 @@ func durationEnv(name string, fallback time.Duration) time.Duration {
 		return fallback
 	}
 	return d
+}
+
+func sanitizeChildEnv(env []string) []string {
+	if len(env) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(env))
+	for _, entry := range env {
+		switch {
+		case strings.HasPrefix(entry, "FORT_TOKEN="):
+			continue
+		case strings.HasPrefix(entry, "FORT_REFRESH_TOKEN="):
+			continue
+		case strings.HasPrefix(entry, "FORT_TOKEN_FILE="):
+			continue
+		case strings.HasPrefix(entry, "FORT_TOKEN_PATH="):
+			continue
+		case strings.HasPrefix(entry, "FORT_REFRESH_TOKEN_PATH="):
+			continue
+		}
+		out = append(out, entry)
+	}
+	return out
 }
 
 func readSecretFile(path string) (string, error) {
@@ -336,7 +374,7 @@ func (c *Client) cmdAuth(args []string) error {
 		}
 		useToken := c.Token != ""
 		if !useToken {
-			return errors.New("auth issue requires --token (admin token)")
+			return errors.New("auth issue requires admin token file auth (--token-file or FORT_TOKEN_PATH/FORT_TOKEN_FILE)")
 		}
 		status, resp, err := c.apiRequest(http.MethodPost, "/v1/auth/token", body, useToken)
 		if err != nil {
@@ -388,7 +426,7 @@ func (c *Client) cmdAuth(args []string) error {
 		}
 		useToken := c.Token != ""
 		if !useToken {
-			return errors.New("auth list requires --token")
+			return errors.New("auth list requires admin token file auth (--token-file or FORT_TOKEN_PATH/FORT_TOKEN_FILE)")
 		}
 		status, resp, err := c.apiRequest(http.MethodGet, "/v1/auth/list"+q, nil, useToken)
 		if err != nil {
@@ -415,7 +453,7 @@ func (c *Client) cmdAuth(args []string) error {
 		}
 		useToken := c.Token != ""
 		if !useToken {
-			return errors.New("auth revoke requires --token")
+			return errors.New("auth revoke requires admin token file auth (--token-file or FORT_TOKEN_PATH/FORT_TOKEN_FILE)")
 		}
 		status, resp, err := c.apiRequest(http.MethodPost, "/v1/auth/revoke", map[string]any{"jti": *jti, "reason": *reason}, useToken)
 		if err != nil {
@@ -468,7 +506,7 @@ func (c *Client) cmdAuthSession(args []string) error {
 		}
 		useToken := c.Token != ""
 		if !useToken {
-			return errors.New("auth session open requires --token (admin token)")
+			return errors.New("auth session open requires admin token file auth (--token-file or FORT_TOKEN_PATH/FORT_TOKEN_FILE)")
 		}
 		status, resp, err := c.apiRequest(http.MethodPost, "/v1/auth/session/open", body, useToken)
 		if err != nil {
@@ -829,7 +867,7 @@ func execWithSecrets(cmdArgs []string, values map[string]string, mode string) er
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 
-	env := os.Environ()
+	env := sanitizeChildEnv(os.Environ())
 	cleanup := func() {}
 	if mode == "env" {
 		for key, value := range values {

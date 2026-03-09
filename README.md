@@ -87,13 +87,14 @@ CLI host resolution order:
 `fort run` performs `open -> materialize -> close` session flow.
 
 CLI token sources:
-1. `--token`
-2. `FORT_TOKEN`
+1. `--token-file`
+2. `FORT_TOKEN_PATH`
+3. `FORT_TOKEN_FILE`
 
 For SI runtime containers, prefer the `si fort ...` wrapper path:
 - SI reads `FORT_TOKEN_PATH` / `FORT_REFRESH_TOKEN_PATH` file state
 - SI refreshes as needed
-- SI injects `--token` for each `fort` call
+- SI keeps auth file-based (no bearer token argv flow)
 
 When invoking `fort` flags through the SI wrapper, pass native `fort` flags after `--`:
 

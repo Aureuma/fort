@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -19,6 +18,8 @@ import (
 	"fort/internal/store"
 	"fort/internal/vaultbridge"
 )
+
+var randomRead = rand.Read
 
 type actorContext struct {
 	AgentID  string
@@ -160,20 +161,24 @@ func (h *handler) parseBody(r *http.Request, dst any) error {
 	return nil
 }
 
-func randomID(prefix string) string {
+func randomID(prefix string) (string, error) {
 	b := make([]byte, 12)
-	if _, err := rand.Read(b); err != nil {
-		return prefix + strconv.FormatInt(time.Now().UnixNano(), 36)
+	if _, err := randomRead(b); err != nil {
+		return "", err
 	}
-	return prefix + hex.EncodeToString(b)
+	return prefix + hex.EncodeToString(b), nil
 }
 
 func (h *handler) addAudit(actorID, action, repo, env, key, decision, reason string) {
 	if strings.TrimSpace(action) == "" {
 		return
 	}
+	id, err := randomID("aud_")
+	if err != nil {
+		return
+	}
 	_ = h.st.AddAudit(model.AuditEvent{
-		ID:        randomID("aud_"),
+		ID:        id,
 		AgentID:   strings.TrimSpace(actorID),
 		Action:    action,
 		Repo:      repo,
@@ -709,14 +714,24 @@ func (h *handler) handleRunSessionOpen(w http.ResponseWriter, r *http.Request) {
 	if req.TTLSeconds > 0 {
 		ttl = time.Duration(req.TTLSeconds) * time.Second
 	}
+	sessionID, err := randomID("sess_")
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to generate session id")
+		return
+	}
+	oneTimeToken, err := randomID("wrp_")
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to generate one-time token")
+		return
+	}
 	sess := model.RunSession{
-		ID:           randomID("sess_"),
+		ID:           sessionID,
 		AgentID:      actor.AgentID,
 		Repo:         repo,
 		Env:          env,
 		Keys:         keys,
 		Mode:         mode,
-		OneTimeToken: randomID("wrp_"),
+		OneTimeToken: oneTimeToken,
 		ExpiresAt:    h.now().Add(ttl),
 		CreatedAt:    h.now(),
 	}

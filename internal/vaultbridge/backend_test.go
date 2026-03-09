@@ -246,3 +246,25 @@ func TestLoadKeyringEntryRejectsMismatchedExtraPrivateKey(t *testing.T) {
 		t.Fatalf("expected ErrKeySprawl, got %v", err)
 	}
 }
+
+func TestLoadKeyringEntryRejectsBroadKeyringPermissions(t *testing.T) {
+	tmp := t.TempDir()
+	safeRoot := filepath.Join(tmp, "safe-root")
+	keyring := filepath.Join(tmp, "keyring.json")
+	writeKeyring(t, keyring, map[string]any{
+		"safe/dev": map[string]any{
+			"repo": "safe",
+			"env":  "dev",
+		},
+	})
+	if err := os.Chmod(keyring, 0o644); err != nil {
+		t.Fatalf("chmod keyring: %v", err)
+	}
+	backend, err := New(Config{SafeRoot: safeRoot, KeyringPath: keyring})
+	if err != nil {
+		t.Fatalf("new backend: %v", err)
+	}
+	if _, err := backend.loadKeyringEntry("safe", "dev"); err == nil || !strings.Contains(err.Error(), "0600") {
+		t.Fatalf("expected strict permission error, got %v", err)
+	}
+}

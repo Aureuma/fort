@@ -258,6 +258,37 @@ func TestEndToEndAuthSecretsAndRunSession(t *testing.T) {
 	}
 }
 
+func TestRunSessionOpenFailsWhenRandomUnavailable(t *testing.T) {
+	ts, adminToken := newTestAPI(t)
+	client := ts.Client()
+	adminHeaders := map[string]string{"Authorization": "Bearer " + adminToken}
+
+	mustCreateAgent(t, client, ts.URL, adminToken, "workload-b", "workload")
+	mustSetPolicy(t, client, ts.URL, adminToken, "workload-b", []map[string]any{{
+		"repo": "safe",
+		"env":  "prod",
+		"ops":  []string{"run"},
+	}})
+	workloadToken := mustIssueToken(t, client, ts.URL, "workload-b", adminHeaders)
+	workloadHeaders := map[string]string{"Authorization": "Bearer " + workloadToken}
+
+	prevRandomRead := randomRead
+	randomRead = func(_ []byte) (int, error) {
+		return 0, io.ErrUnexpectedEOF
+	}
+	t.Cleanup(func() { randomRead = prevRandomRead })
+
+	status, body := doJSON(t, client, http.MethodPost, ts.URL+"/v1/run/session/open", map[string]any{
+		"repo": "safe",
+		"env":  "prod",
+		"keys": []string{"API_KEY"},
+		"mode": "files",
+	}, workloadHeaders)
+	if status != http.StatusInternalServerError {
+		t.Fatalf("expected 500 when random source fails, got status=%d body=%v", status, body)
+	}
+}
+
 func TestDefaultDenyWithoutBinding(t *testing.T) {
 	ts, adminToken := newTestAPI(t)
 	client := ts.Client()

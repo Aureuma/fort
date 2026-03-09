@@ -92,19 +92,23 @@ func TestFortE2ESIVault(t *testing.T) {
 		return err
 	}, "fortd readiness")
 
-	runCmd(t, "", nil, fortClient, "--host", fortBase, "--token", adminToken, "agent", "create", "--id", "e2e-agent", "--type", "workload")
-	runCmd(t, "", nil, fortClient, "--host", fortBase, "--token", adminToken, "agent", "policy", "set", "--id", "e2e-agent", "--bind", "safe:dev:get,set,list,batch-get,run")
 	refreshFile := filepath.Join(stateDir, "e2e.refresh")
 	accessFile := filepath.Join(stateDir, "e2e.access")
-	runCmd(t, "", nil, fortClient, "--host", fortBase, "--token", adminToken, "auth", "session", "open", "--agent", "e2e-agent", "--access-ttl", "3m", "--refresh-ttl", "30m", "--refresh-token-out", refreshFile)
+	adminTokenFile := filepath.Join(stateDir, "admin.token")
+	writeFile(t, adminTokenFile, []byte(adminToken), 0o600)
+	runCmd(t, "", nil, fortClient, "--host", fortBase, "--token-file", adminTokenFile, "agent", "create", "--id", "e2e-agent", "--type", "workload")
+	runCmd(t, "", nil, fortClient, "--host", fortBase, "--token-file", adminTokenFile, "agent", "policy", "set", "--id", "e2e-agent", "--bind", "safe:dev:get,set,list,batch-get,run")
+	runCmd(t, "", nil, fortClient, "--host", fortBase, "--token-file", adminTokenFile, "auth", "session", "open", "--agent", "e2e-agent", "--access-ttl", "3m", "--refresh-ttl", "30m", "--refresh-token-out", refreshFile)
 	if err := os.Chmod(refreshFile, 0o600); err != nil {
 		t.Fatalf("chmod refresh token: %v", err)
 	}
 	runCmd(t, "", nil, fortAgent, "--once", "--host", fortBase, "--refresh-token-file", refreshFile, "--token-path", accessFile)
-	accessToken := strings.TrimSpace(stringMustRead(t, accessFile, "read workload access token"))
+	if err := os.Chmod(accessFile, 0o600); err != nil {
+		t.Fatalf("chmod access token: %v", err)
+	}
 
-	runCmd(t, "", nil, fortClient, "--host", fortBase, "--token", accessToken, "set", "--repo", "safe", "--env", "dev", "--key", "E2E_KEY", "--value", "from-fort")
-	fortGot := runCmd(t, "", nil, fortClient, "--host", fortBase, "--token", accessToken, "get", "--repo", "safe", "--env", "dev", "--key", "E2E_KEY", "--format", "raw")
+	runCmd(t, "", nil, fortClient, "--host", fortBase, "--token-file", accessFile, "set", "--repo", "safe", "--env", "dev", "--key", "E2E_KEY", "--value", "from-fort")
+	fortGot := runCmd(t, "", nil, fortClient, "--host", fortBase, "--token-file", accessFile, "get", "--repo", "safe", "--env", "dev", "--key", "E2E_KEY", "--format", "raw")
 	manualGot := decryptVaultCipherForTest(t, envFile, "E2E_KEY", keyringFile)
 	if fortGot != manualGot {
 		t.Fatalf("fort get and manual decrypt mismatch: fort=%q manual=%q", fortGot, manualGot)
@@ -115,14 +119,14 @@ func TestFortE2ESIVault(t *testing.T) {
 		t.Fatalf("si vault get mismatch: si=%q fort=%q", siGot, fortGot)
 	}
 	runCmd(t, siRepo, []string{envKV("SI_VAULT_KEYRING_FILE", keyringFile)}, "go", "run", "./tools/si", "vault", "set", "E2E_SI_FORT_BRIDGE", "from-si", "--repo", "safe", "--env", "dev", "--env-file", envFile)
-	fromSi := runCmd(t, "", nil, fortClient, "--host", fortBase, "--token", accessToken, "get", "--repo", "safe", "--env", "dev", "--key", "E2E_SI_FORT_BRIDGE", "--format", "raw")
+	fromSi := runCmd(t, "", nil, fortClient, "--host", fortBase, "--token-file", accessFile, "get", "--repo", "safe", "--env", "dev", "--key", "E2E_SI_FORT_BRIDGE", "--format", "raw")
 	if fromSi != "from-si" {
 		t.Fatalf("fort get from si set value mismatch: %q", fromSi)
 	}
 
 	siFortGot := runCmd(t, siRepo, []string{
 		envKV("FORT_HOST", fortBase),
-		envKV("FORT_TOKEN", accessToken),
+		envKV("FORT_TOKEN_PATH", accessFile),
 	}, "go", "run", "./tools/si", "fort", "--repo", fortRepo, "--bin", fortClient, "get", "--repo", "safe", "--env", "dev", "--key", "E2E_SI_FORT_BRIDGE", "--format", "raw")
 	if siFortGot != fromSi {
 		t.Fatalf("si fort wrapper mismatch: si=%q fort=%q", siFortGot, fromSi)
@@ -134,10 +138,10 @@ type e2eFortKeyring struct {
 }
 
 type e2eFortKeyringEntry struct {
-	Repo        string `json:"repo"`
-	Env         string `json:"env"`
-	PublicKey   string `json:"public_key"`
-	PrivateKey  string `json:"private_key"`
+	Repo       string `json:"repo"`
+	Env        string `json:"env"`
+	PublicKey  string `json:"public_key"`
+	PrivateKey string `json:"private_key"`
 }
 
 func seedFortStateForE2E(t *testing.T, statePath, keyringPath, signingKeyPath, signingKey, repo, env string) string {
