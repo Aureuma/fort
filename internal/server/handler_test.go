@@ -393,6 +393,49 @@ func TestAuthSessionOpenRefreshAndClose(t *testing.T) {
 	}
 }
 
+func TestBreakglassSessionRefreshCanRotateMultipleTimes(t *testing.T) {
+	ts, adminToken := newTestAPI(t)
+	client := ts.Client()
+
+	mustCreateAgent(t, client, ts.URL, adminToken, "fort-breakglass-admin", "user")
+	adminHeaders := map[string]string{"Authorization": "Bearer " + adminToken}
+
+	status, body := doJSON(t, client, http.MethodPost, ts.URL+"/v1/auth/session/open", map[string]any{
+		"agent_id":    "fort-breakglass-admin",
+		"access_ttl":  "90s",
+		"refresh_ttl": "10m",
+	}, adminHeaders)
+	if status != http.StatusOK {
+		t.Fatalf("session open failed status=%d body=%v", status, body)
+	}
+	refreshToken, _ := body["refresh_token"].(string)
+	if refreshToken == "" {
+		t.Fatalf("missing refresh token from session open")
+	}
+
+	status, body = doJSON(t, client, http.MethodPost, ts.URL+"/v1/auth/session/refresh", map[string]any{
+		"refresh_token": refreshToken,
+	}, nil)
+	if status != http.StatusOK {
+		t.Fatalf("first refresh failed status=%d body=%v", status, body)
+	}
+	refreshToken2, _ := body["refresh_token"].(string)
+	if refreshToken2 == "" || refreshToken2 == refreshToken {
+		t.Fatalf("expected rotated refresh token after first refresh")
+	}
+
+	status, body = doJSON(t, client, http.MethodPost, ts.URL+"/v1/auth/session/refresh", map[string]any{
+		"refresh_token": refreshToken2,
+	}, nil)
+	if status != http.StatusOK {
+		t.Fatalf("second refresh failed status=%d body=%v", status, body)
+	}
+	refreshToken3, _ := body["refresh_token"].(string)
+	if refreshToken3 == "" || refreshToken3 == refreshToken2 {
+		t.Fatalf("expected rotated refresh token after second refresh")
+	}
+}
+
 func TestAgentRotateInvalidatesExistingRefreshSessions(t *testing.T) {
 	ts, adminToken := newTestAPI(t)
 	client := ts.Client()

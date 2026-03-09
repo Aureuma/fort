@@ -79,6 +79,10 @@ func containsAudience(aud jwt.ClaimStrings, expected string) bool {
 }
 
 func (m *Manager) Issue(agent model.Agent, ttl time.Duration, audience string) (string, model.TokenRecord, error) {
+	return m.issue(agent, ttl, audience, true)
+}
+
+func (m *Manager) issue(agent model.Agent, ttl time.Duration, audience string, revokeBreakglassArtifacts bool) (string, model.TokenRecord, error) {
 	if ttl <= 0 {
 		ttl = 15 * time.Minute
 	}
@@ -87,7 +91,7 @@ func (m *Manager) Issue(agent model.Agent, ttl time.Duration, audience string) (
 		audience = "fort-api"
 	}
 	now := m.now()
-	if agent.ID == breakglassAdminAgentID {
+	if revokeBreakglassArtifacts && agent.ID == breakglassAdminAgentID {
 		if _, err := m.Store.RevokeActiveTokensForAgent(agent.ID, "breakglass_reissued", now); err != nil {
 			return "", model.TokenRecord{}, err
 		}
@@ -256,7 +260,7 @@ func (m *Manager) RefreshByToken(refreshToken string) (string, model.TokenRecord
 	if ttl <= 0 {
 		ttl = 15 * time.Minute
 	}
-	accessToken, rec, err := m.Issue(agent, ttl, sess.Audience)
+	accessToken, rec, err := m.issue(agent, ttl, sess.Audience, false)
 	if err != nil {
 		return "", model.TokenRecord{}, model.RefreshSession{}, "", err
 	}

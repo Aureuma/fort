@@ -317,3 +317,45 @@ func TestIssueBreakglassRevokesPriorActiveArtifacts(t *testing.T) {
 		t.Fatalf("expected breakglass refresh session revoked on reissue")
 	}
 }
+
+func TestRefreshByTokenKeepsBreakglassSessionActive(t *testing.T) {
+	now := time.Date(2026, 3, 4, 12, 0, 0, 0, time.UTC)
+	mgr, st, _ := newAuthManager(t, now)
+	breakglass, err := st.CreateAgent(breakglassAdminAgentID, model.AgentTypeUser, model.AgentStatusActive, now)
+	if err != nil {
+		t.Fatalf("create breakglass agent: %v", err)
+	}
+
+	_, _, session, refreshToken, err := mgr.OpenRefreshSession(breakglass, 2*time.Minute, time.Hour, "fort-api")
+	if err != nil {
+		t.Fatalf("open breakglass refresh session: %v", err)
+	}
+
+	mgr.Now = func() time.Time { return now.Add(30 * time.Second) }
+	_, _, refreshedSession, nextRefreshToken, err := mgr.RefreshByToken(refreshToken)
+	if err != nil {
+		t.Fatalf("refresh breakglass token: %v", err)
+	}
+	if refreshedSession.ID != session.ID {
+		t.Fatalf("expected same session id on refresh: got=%q want=%q", refreshedSession.ID, session.ID)
+	}
+	storedAfterFirst, err := st.GetRefreshSession(session.ID)
+	if err != nil {
+		t.Fatalf("get refreshed breakglass session: %v", err)
+	}
+	if !storedAfterFirst.RevokedAt.IsZero() {
+		t.Fatalf("expected breakglass session to stay active after refresh")
+	}
+
+	mgr.Now = func() time.Time { return now.Add(60 * time.Second) }
+	if _, _, _, _, err := mgr.RefreshByToken(nextRefreshToken); err != nil {
+		t.Fatalf("expected second refresh with rotated token to succeed, got %v", err)
+	}
+	storedAfterSecond, err := st.GetRefreshSession(session.ID)
+	if err != nil {
+		t.Fatalf("get breakglass session after second refresh: %v", err)
+	}
+	if !storedAfterSecond.RevokedAt.IsZero() {
+		t.Fatalf("expected breakglass session to remain active after repeated refresh")
+	}
+}
