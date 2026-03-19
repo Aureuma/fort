@@ -1,8 +1,10 @@
 .git
 .gitignore
 .dist
+.artifacts
 .tmp
 bin
+target
 tickets
 *.log
 *.tmp

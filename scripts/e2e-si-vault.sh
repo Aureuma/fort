@@ -3,4 +3,4 @@ set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
-go test -tags=integration ./integration -run TestFortE2ESIVault "$@"
+cargo test fort_e2e_roundtrip_preserves_vault_ciphertext_contract -- --nocapture "$@"

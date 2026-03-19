@@ -11,24 +11,10 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
-      - name: Checkout SI repo (Fort/SI Vault integration fixture)
-        uses: actions/checkout@v4
-        with:
-          repository: Aureuma/si
-          path: si
-          fetch-depth: 1
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
+      - uses: dtolnay/rust-toolchain@stable
       - name: Test
-        run: go test ./...
+        run: cargo test
       - name: Build binaries
-        run: |
-          go build ./cmd/fort
-          go build ./cmd/fortd
+        run: cargo build --release --bin fort --bin fortd --bin fort-agent --bin fort-seed
       - name: Build image
         run: docker build -t fort:ci .
-      - name: Integration tests
-        env:
-          SI_REPO: ${{ github.workspace }}/si
-        run: go test -tags integration ./integration/...

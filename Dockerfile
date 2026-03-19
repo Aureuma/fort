@@ -1,17 +1,15 @@
-FROM golang:1.25-alpine AS build
+FROM rust:1.94-slim AS build
 WORKDIR /src
-COPY go.mod go.sum ./
-RUN go mod download
-COPY . .
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags='-s -w' -o /out/fortd ./cmd/fortd
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags='-s -w' -o /out/fort ./cmd/fort
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags='-s -w' -o /out/fort-agent ./cmd/fort-agent
+COPY Cargo.toml Cargo.lock ./
+COPY src ./src
+COPY tests ./tests
+RUN cargo build --release --bin fort --bin fortd --bin fort-agent
 
-FROM alpine:3.21
-RUN apk add --no-cache ca-certificates
-COPY --from=build /out/fortd /usr/local/bin/fortd
-COPY --from=build /out/fort /usr/local/bin/fort
-COPY --from=build /out/fort-agent /usr/local/bin/fort-agent
+FROM debian:bookworm-slim
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+COPY --from=build /src/target/release/fortd /usr/local/bin/fortd
+COPY --from=build /src/target/release/fort /usr/local/bin/fort
+COPY --from=build /src/target/release/fort-agent /usr/local/bin/fort-agent
 
 ENV FORT_ADDR=:8088 \
     FORT_STATE_PATH=/var/lib/fort/state.json \

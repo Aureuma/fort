@@ -1,6 +1,8 @@
 tickets/
 bin/
 .dist/
+.artifacts/
+target/
 *.log
 *.tmp
 fort-state.json

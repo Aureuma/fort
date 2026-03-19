@@ -45,9 +45,7 @@ Fort does not:
 
 ## Build
 ```bash
-go build -o .dist/fort ./cmd/fort
-go build -o .dist/fortd ./cmd/fortd
-go build -o .dist/fort-agent ./cmd/fort-agent
+cargo build --release --bin fort --bin fortd --bin fort-agent --bin fort-seed
 ```
 
 ## Run locally
@@ -60,7 +58,7 @@ export FORT_JWT_SIGNING_KEY_FILE=/tmp/fort-jwt-signing.key
 export FORT_SAFE_ROOT=/home/shawn/Development/safe
 export FORT_VAULT_KEYRING_FILE=$HOME/.si/vault/si-vault-keyring.json
 
-./.dist/fortd
+./target/release/fortd
 ```
 
 ## CLI
@@ -126,14 +124,13 @@ Both deploy manifests require `FORT_JWT_SIGNING_KEY_FILE` mounted from the host.
 
 ## Test
 ```bash
-go test ./...
-go test -tags=integration ./integration -run TestFortSmokeContainer
-go test -tags=integration ./integration -run TestFortE2ESIVault
+cargo test
+cargo test fort_e2e_roundtrip_preserves_vault_ciphertext_contract -- --nocapture
 ./scripts/smoke-container.sh
 ./scripts/e2e-si-vault.sh
 ```
 
 Integration coverage includes:
-- container smoke for `fortd` + `fort-agent` token refresh flow
-- SI↔Fort↔Vault end-to-end parity checks
-- Fort get/set parity with manual SI Vault decrypt verification
+- Rust e2e coverage for `fortd` + `fort` + `fort-agent`
+- Fort↔Vault parity checks against ciphertext in `safe`
+- container smoke validation through the Docker image
