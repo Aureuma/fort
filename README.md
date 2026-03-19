@@ -48,6 +48,14 @@ Fort does not:
 cargo build --release --bin fort --bin fortd --bin fort-agent --bin fort-seed
 ```
 
+Container builds are Rust-only and lock to `Cargo.lock`.
+The runtime image ships:
+- `fortd`
+- `fort`
+- `fort-agent`
+
+The runtime image intentionally does not ship `fort-seed`; provisioning shortcuts remain test-only.
+
 ## Run locally
 ```bash
 export FORT_ADDR=127.0.0.1:8088
@@ -121,6 +129,12 @@ viva deploy --file deploy/service.public.yaml
 
 Public domain config is in `deploy/service.public.yaml`.
 Both deploy manifests require `FORT_JWT_SIGNING_KEY_FILE` mounted from the host.
+The runtime contract stays file-backed in containerized deploys:
+- `FORT_JWT_SIGNING_KEY_FILE` must point to a mounted `0600` regular file
+- `FORT_VAULT_KEYRING_FILE` must point to a mounted `0600` regular file
+- `FORT_SAFE_ROOT` must point to the mounted `safe` directory
+
+`fortd` now fails at startup when the mounted safe root or SI Vault keyring path is missing or invalid, instead of deferring that failure until first secret access.
 
 ## Test
 ```bash

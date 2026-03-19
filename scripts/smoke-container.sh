@@ -23,6 +23,21 @@ docker run -d --rm \
   -v "$STATE_DIR:/var/lib/fort" \
   -v "$SAFE_DIR:/safe" \
   fort:smoke >/dev/null
-sleep 2
+for _ in $(seq 1 30); do
+  status="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}starting{{end}}' fort-smoke)"
+  if [[ "$status" == "healthy" ]]; then
+    break
+  fi
+  if [[ "$status" == "unhealthy" ]]; then
+    docker logs fort-smoke
+    exit 1
+  fi
+  sleep 1
+done
+if [[ "${status:-starting}" != "healthy" ]]; then
+  docker logs fort-smoke
+  echo "fort-smoke did not become healthy" >&2
+  exit 1
+fi
 docker exec fort-smoke /usr/local/bin/fort --host http://127.0.0.1:8088 doctor
 docker exec fort-smoke /usr/local/bin/fort --host http://127.0.0.1:8088 --token-file /var/lib/fort/admin.token auth whoami "$@"

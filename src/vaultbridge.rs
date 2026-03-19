@@ -71,7 +71,7 @@ impl Backend {
         if keyring_path.as_os_str().is_empty() {
             bail!("keyring path is required");
         }
-        Ok(Self {
+        let backend = Self {
             safe_root,
             keyring_path,
             extra_priv_keys: config
@@ -81,7 +81,9 @@ impl Backend {
                 .filter(|part| !part.is_empty())
                 .collect(),
             write_lock: Mutex::new(()),
-        })
+        };
+        backend.validate_startup()?;
+        Ok(backend)
     }
 
     pub fn get(&self, repo: &str, env: &str, key: &str) -> Result<String, VaultError> {
@@ -139,10 +141,26 @@ impl Backend {
         self.safe_root.join(repo).join(format!(".env.{env}"))
     }
 
-    fn load_keyring_entry(&self, repo: &str, env: &str) -> Result<KeyringEntry, VaultError> {
+    fn validate_startup(&self) -> Result<()> {
+        let metadata = fs::metadata(&self.safe_root)
+            .with_context(|| format!("stat {}", self.safe_root.display()))?;
+        if !metadata.is_dir() {
+            bail!("safe root must be a directory");
+        }
+        let doc = self.read_keyring_doc().map_err(map_keyring_error)?;
+        self.validate_single_key_material(&doc)
+            .map_err(map_keyring_error)?;
+        Ok(())
+    }
+
+    fn read_keyring_doc(&self) -> Result<KeyringDoc, VaultError> {
         ensure_strict_secret_file(&self.keyring_path).map_err(|_| VaultError::Io)?;
         let raw = fs::read_to_string(&self.keyring_path).map_err(|_| VaultError::Io)?;
-        let doc: KeyringDoc = serde_json::from_str(&raw).map_err(|_| VaultError::Io)?;
+        serde_json::from_str(&raw).map_err(|_| VaultError::Io)
+    }
+
+    fn load_keyring_entry(&self, repo: &str, env: &str) -> Result<KeyringEntry, VaultError> {
+        let doc = self.read_keyring_doc()?;
         self.validate_single_key_material(&doc)?;
         let map_key = format!("{}/{}", repo.to_lowercase(), env.to_lowercase());
         if let Some(entry) = doc.entries.get(&map_key) {
@@ -315,6 +333,19 @@ fn nixless_chown(path: &Path, uid: u32, gid: u32) -> std::io::Result<()> {
 
 fn normalize_hex(raw: &str) -> String {
     raw.trim().to_lowercase()
+}
+
+fn map_keyring_error(error: VaultError) -> anyhow::Error {
+    match error {
+        VaultError::NotFound => anyhow::anyhow!("keyring entry not found"),
+        VaultError::Invalid => anyhow::anyhow!("vault keyring is invalid"),
+        VaultError::KeySprawl => {
+            anyhow::anyhow!("vault keyring violates single-key-material invariant")
+        }
+        VaultError::Io => anyhow::anyhow!(
+            "vault keyring file is missing, unreadable, or permissions are too open"
+        ),
+    }
 }
 
 fn encrypt_value(plain: &str, public_key_hex: &str) -> Result<String, VaultError> {

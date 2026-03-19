@@ -174,6 +174,48 @@ fn fort_e2e_roundtrip_preserves_vault_ciphertext_contract() {
     let _ = child.wait();
 }
 
+#[test]
+fn fort_backend_fails_fast_when_safe_root_or_keyring_mounts_are_wrong() {
+    let temp = TempDir::new().expect("tempdir");
+    let safe_root = temp.path().join("safe");
+    let keyring_path = temp.path().join("si-vault-keyring.json");
+
+    let missing_safe = fort::vaultbridge::Backend::new(fort::vaultbridge::Config {
+        safe_root: safe_root.display().to_string(),
+        keyring_path: keyring_path.display().to_string(),
+        extra_priv_keys: Vec::new(),
+    });
+    assert!(missing_safe.is_err(), "missing safe root must fail");
+
+    fs::create_dir_all(&safe_root).expect("mkdir safe root");
+    fs::write(&keyring_path, b"{\"entries\":{}}\n").expect("write keyring");
+    set_0600(&keyring_path);
+
+    fort::vaultbridge::Backend::new(fort::vaultbridge::Config {
+        safe_root: safe_root.display().to_string(),
+        keyring_path: keyring_path.display().to_string(),
+        extra_priv_keys: Vec::new(),
+    })
+    .expect("valid mounts");
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&keyring_path)
+            .expect("stat keyring")
+            .permissions();
+        perms.set_mode(0o644);
+        fs::set_permissions(&keyring_path, perms).expect("chmod keyring");
+    }
+
+    let open_keyring = fort::vaultbridge::Backend::new(fort::vaultbridge::Config {
+        safe_root: safe_root.display().to_string(),
+        keyring_path: keyring_path.display().to_string(),
+        extra_priv_keys: Vec::new(),
+    });
+    assert!(open_keyring.is_err(), "open keyring permissions must fail");
+}
+
 fn seed_state(state_path: &PathBuf, keyring_path: &PathBuf, signing_key_path: &PathBuf) -> String {
     let seed = std::env::var("CARGO_BIN_EXE_fort-seed").expect("fort-seed path");
     let output = Command::new(seed)
