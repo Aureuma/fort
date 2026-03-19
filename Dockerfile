@@ -2,7 +2,6 @@ FROM rust:1.94-slim AS build
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY src ./src
-COPY tests ./tests
 RUN cargo build --locked --release --bin fort --bin fortd --bin fort-agent
 
 FROM debian:bookworm-slim

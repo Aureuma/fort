@@ -3,7 +3,7 @@ set -euo pipefail
 
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
-cargo build --release --bin fort --bin fortd --bin fort-agent --bin fort-seed
+cargo build --locked --release --bin fort --bin fortd --bin fort-agent --bin fort-seed
 docker build -t fort:smoke .
 STATE_DIR="$(mktemp -d)"
 SAFE_DIR="$(mktemp -d)"
