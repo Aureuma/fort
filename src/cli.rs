@@ -385,13 +385,12 @@ impl Client {
             "ready_status": ready_status,
             "ready": ready
         });
-        if !self.token.is_empty() {
-            if let Ok((status, whoami)) =
+        if !self.token.is_empty()
+            && let Ok((status, whoami)) =
                 self.api_request(Method::GET, "/v1/auth/whoami", None, true)
-            {
-                out["whoami_status"] = json!(status);
-                out["whoami"] = whoami;
-            }
+        {
+            out["whoami_status"] = json!(status);
+            out["whoami"] = whoami;
         }
         if self.json {
             print_json(&out)
@@ -1026,10 +1025,10 @@ fn parse_duration_seconds(raw: &str, fallback: Duration) -> Result<i64> {
     if raw.trim().is_empty() {
         return Ok(fallback.as_secs() as i64);
     }
-    if let Ok(seconds) = raw.trim().parse::<i64>() {
-        if seconds > 0 {
-            return Ok(seconds);
-        }
+    if let Ok(seconds) = raw.trim().parse::<i64>()
+        && seconds > 0
+    {
+        return Ok(seconds);
     }
     let mut number = String::new();
     let mut total = 0i64;
@@ -1067,9 +1066,7 @@ fn parse_binding(raw: &str) -> Result<Binding> {
     }
     let ops = split_csv(ops_raw)
         .into_iter()
-        .map(|name| {
-            Operation::from_str(&name).ok_or_else(|| anyhow::anyhow!("invalid op {}", name))
-        })
+        .map(|name| Operation::parse(&name).ok_or_else(|| anyhow::anyhow!("invalid op {}", name)))
         .collect::<Result<Vec<_>>>()?;
     Ok(Binding {
         repo: repo.to_string(),

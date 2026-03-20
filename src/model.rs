@@ -46,7 +46,7 @@ impl Operation {
         }
     }
 
-    pub fn from_str(raw: &str) -> Option<Self> {
+    pub fn parse(raw: &str) -> Option<Self> {
         match raw.trim() {
             "get" => Some(Self::Get),
             "set" => Some(Self::Set),

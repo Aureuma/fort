@@ -191,9 +191,7 @@ fn is_admin_agent(state: &AppState, agent_id: &str) -> bool {
         .ok()
         .map(|policy| {
             policy.bindings.iter().any(|binding| {
-                binding.repo == "*"
-                    && binding.env == "*"
-                    && binding.ops.iter().any(|op| *op == Operation::Any)
+                binding.repo == "*" && binding.env == "*" && binding.ops.contains(&Operation::Any)
             })
         })
         .unwrap_or(false)
@@ -205,6 +203,7 @@ fn random_id(prefix: &str) -> String {
     format!("{prefix}{}", hex::encode(raw))
 }
 
+#[allow(clippy::too_many_arguments)]
 fn add_audit(
     state: &AppState,
     actor_id: &str,

@@ -254,7 +254,7 @@ impl Store {
             seen.insert(normalized.as_str().to_string());
         }
         seen.into_iter()
-            .filter_map(|name| Operation::from_str(&name))
+            .filter_map(|name| Operation::parse(&name))
             .collect()
     }
 
