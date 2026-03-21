@@ -60,9 +60,10 @@ The runtime image intentionally does not ship `fort-seed`; provisioning shortcut
 ```bash
 export FORT_ADDR=127.0.0.1:8088
 export FORT_STATE_PATH=$PWD/fort-state.json
-printf '%s' 'replace-with-at-least-32-char-signing-key' > /tmp/fort-jwt-signing.key
-chmod 600 /tmp/fort-jwt-signing.key
-export FORT_JWT_SIGNING_KEY_FILE=/tmp/fort-jwt-signing.key
+mkdir -p .artifacts/local
+printf '%s' 'replace-with-at-least-32-char-signing-key' > .artifacts/local/fort-jwt-signing.key
+chmod 600 .artifacts/local/fort-jwt-signing.key
+export FORT_JWT_SIGNING_KEY_FILE=$PWD/.artifacts/local/fort-jwt-signing.key
 export FORT_SAFE_ROOT=/home/shawn/Development/safe
 export FORT_VAULT_KEYRING_FILE=$HOME/.si/vault/si-vault-keyring.json
 

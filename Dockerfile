@@ -4,7 +4,7 @@ COPY Cargo.toml Cargo.lock ./
 COPY src ./src
 RUN cargo build --locked --release --bin fort --bin fortd --bin fort-agent
 
-FROM debian:bookworm-slim
+FROM debian:trixie-slim
 RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
 COPY --from=build /src/target/release/fortd /usr/local/bin/fortd
 COPY --from=build /src/target/release/fort /usr/local/bin/fort
