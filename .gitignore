@@ -1,5 +1,7 @@
 tickets/
 bin/
+!src/bin/
+!src/bin/*.rs
 .dist/
 .artifacts/
 target/
