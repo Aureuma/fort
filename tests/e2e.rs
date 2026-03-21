@@ -19,6 +19,7 @@ fn fort_e2e_roundtrip_preserves_vault_ciphertext_contract() {
     let state_path = state_dir.join("state.json");
     let keyring_path = state_dir.join("si-vault-keyring.json");
     let signing_key_path = state_dir.join("jwt-signing.key");
+    let config_path = state_dir.join("fortd.toml");
     let refresh_path = state_dir.join("e2e.refresh");
     let access_path = state_dir.join("e2e.access");
     let admin_token_path = state_dir.join("admin.token");
@@ -32,13 +33,20 @@ fn fort_e2e_roundtrip_preserves_vault_ciphertext_contract() {
     let fort = std::env::var("CARGO_BIN_EXE_fort").expect("fort path");
     let fort_agent = std::env::var("CARGO_BIN_EXE_fort-agent").expect("fort-agent path");
     let host = format!("http://{addr}");
+    fs::write(
+        &config_path,
+        format!(
+            "addr = \"{addr}\"\nstate_path = \"{}\"\njwt_signing_key_file = \"{}\"\nsafe_root = \"{}\"\nvault_keyring_file = \"{}\"\ntoken_ttl = \"15m\"\nrefresh_session_ttl = \"24h\"\nrun_ttl = \"60s\"\nsecret_ttl = \"120s\"\n",
+            state_path.display(),
+            signing_key_path.display(),
+            safe_root.display(),
+            keyring_path.display(),
+        ),
+    )
+    .expect("write fortd config");
 
     let mut child = Command::new(&fortd)
-        .env("FORT_ADDR", &addr)
-        .env("FORT_STATE_PATH", &state_path)
-        .env("FORT_JWT_SIGNING_KEY_FILE", &signing_key_path)
-        .env("FORT_SAFE_ROOT", &safe_root)
-        .env("FORT_VAULT_KEYRING_FILE", &keyring_path)
+        .args(["--config-file", config_path.to_str().expect("config path")])
         .stdout(Stdio::null())
         .stderr(Stdio::inherit())
         .spawn()

@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
+use serde::Deserialize;
 
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -58,6 +59,78 @@ impl Config {
             secret_ttl: parse_duration_env("FORT_SECRET_TTL", Duration::from_secs(120)),
         })
     }
+
+    pub fn from_file(path: &Path) -> Result<Self> {
+        let source =
+            fs::read_to_string(path).with_context(|| format!("read config {}", path.display()))?;
+        let parsed: FileConfig =
+            toml::from_str(&source).with_context(|| format!("parse config {}", path.display()))?;
+        let signing_key_file = parsed.jwt_signing_key_file.trim().to_string();
+        if signing_key_file.is_empty() {
+            bail!("jwt_signing_key_file is required in {}", path.display());
+        }
+        let signing_key = read_secret_file(&signing_key_file)?;
+        if signing_key.len() < 32 {
+            bail!("JWT signing key must be at least 32 characters");
+        }
+        match signing_key.to_lowercase().as_str() {
+            "change-me" | "dev-only-change-me" => {
+                bail!("JWT signing key uses an insecure placeholder value")
+            }
+            _ => {}
+        }
+        Ok(Self {
+            addr: normalize_value(parsed.addr, ":8088"),
+            state_path: normalize_value(parsed.state_path, "./fort-state.json"),
+            signing_key_file,
+            signing_key,
+            safe_root: normalize_value(parsed.safe_root, "/safe"),
+            keyring_path: normalize_value(parsed.vault_keyring_file, &default_vault_keyring_path()),
+            extra_private_keys: parsed
+                .vault_private_keys
+                .into_iter()
+                .map(|value| value.trim().to_owned())
+                .filter(|value| !value.is_empty())
+                .collect(),
+            token_ttl: parse_duration_value(
+                parsed.token_ttl.as_deref(),
+                Duration::from_secs(15 * 60),
+            ),
+            refresh_session_ttl: parse_duration_value(
+                parsed.refresh_session_ttl.as_deref(),
+                Duration::from_secs(24 * 60 * 60),
+            ),
+            run_ttl: parse_duration_value(parsed.run_ttl.as_deref(), Duration::from_secs(60)),
+            secret_ttl: parse_duration_value(
+                parsed.secret_ttl.as_deref(),
+                Duration::from_secs(120),
+            ),
+        })
+    }
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct FileConfig {
+    #[serde(default)]
+    addr: String,
+    #[serde(default)]
+    state_path: String,
+    #[serde(default)]
+    jwt_signing_key_file: String,
+    #[serde(default)]
+    safe_root: String,
+    #[serde(default)]
+    vault_keyring_file: String,
+    #[serde(default)]
+    vault_private_keys: Vec<String>,
+    #[serde(default)]
+    token_ttl: Option<String>,
+    #[serde(default)]
+    refresh_session_ttl: Option<String>,
+    #[serde(default)]
+    run_ttl: Option<String>,
+    #[serde(default)]
+    secret_ttl: Option<String>,
 }
 
 pub fn env_trim(name: &str) -> String {
@@ -79,6 +152,23 @@ pub fn parse_duration_env(name: &str, fallback: Duration) -> Duration {
         return fallback;
     }
     humantime_compat::parse_duration(&value).unwrap_or(fallback)
+}
+
+pub fn parse_duration_value(value: Option<&str>, fallback: Duration) -> Duration {
+    let value = value.unwrap_or_default().trim();
+    if value.is_empty() {
+        return fallback;
+    }
+    humantime_compat::parse_duration(value).unwrap_or(fallback)
+}
+
+fn normalize_value(value: String, fallback: &str) -> String {
+    let value = value.trim();
+    if value.is_empty() {
+        fallback.trim().to_string()
+    } else {
+        value.to_string()
+    }
 }
 
 pub fn read_secret_file(path: &str) -> Result<String> {

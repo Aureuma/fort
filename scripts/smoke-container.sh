@@ -17,11 +17,6 @@ printf '%s' "$ADMIN_TOKEN" > "$ADMIN_TOKEN_PATH"
 chmod 600 "$ADMIN_TOKEN_PATH"
 docker run -d \
   --name fort-smoke \
-  -e FORT_ADDR=:8088 \
-  -e FORT_STATE_PATH=/var/lib/fort/state.json \
-  -e FORT_JWT_SIGNING_KEY_FILE=/var/lib/fort/jwt-signing.key \
-  -e FORT_SAFE_ROOT=/safe \
-  -e FORT_VAULT_KEYRING_FILE=/var/lib/fort/si-vault-keyring.json \
   -v "$STATE_DIR:/var/lib/fort" \
   -v "$SAFE_DIR:/safe" \
   fort:smoke >/dev/null

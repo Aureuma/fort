@@ -1,9 +1,13 @@
 use clap::Parser;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 #[derive(Parser)]
 #[command(name = "fortd")]
-struct FortdCli {}
+struct FortdCli {
+    #[arg(long)]
+    config_file: Option<PathBuf>,
+}
 
 fn main() {
     if let Err(error) = run() {
@@ -13,8 +17,11 @@ fn main() {
 }
 
 fn run() -> anyhow::Result<()> {
-    let _ = FortdCli::parse();
-    let config = fort::config::Config::from_env()?;
+    let cli = FortdCli::parse();
+    let config = match cli.config_file.as_deref() {
+        Some(path) => fort::config::Config::from_file(path)?,
+        None => fort::config::Config::from_env()?,
+    };
     let store = Arc::new(fort::store::Store::new(&config.state_path)?);
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()

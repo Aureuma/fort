@@ -58,16 +58,22 @@ The runtime image intentionally does not ship `fort-seed`; provisioning shortcut
 
 ## Run locally
 ```bash
-export FORT_ADDR=127.0.0.1:8088
-export FORT_STATE_PATH=$PWD/fort-state.json
 mkdir -p .artifacts/local
 printf '%s' 'replace-with-at-least-32-char-signing-key' > .artifacts/local/fort-jwt-signing.key
 chmod 600 .artifacts/local/fort-jwt-signing.key
-export FORT_JWT_SIGNING_KEY_FILE=$PWD/.artifacts/local/fort-jwt-signing.key
-export FORT_SAFE_ROOT=/home/shawn/Development/safe
-export FORT_VAULT_KEYRING_FILE=$HOME/.si/vault/si-vault-keyring.json
+cat > .artifacts/local/fortd.toml <<EOF
+addr = "127.0.0.1:8088"
+state_path = "$PWD/.artifacts/local/fort-state.json"
+jwt_signing_key_file = "$PWD/.artifacts/local/fort-jwt-signing.key"
+safe_root = "/home/shawn/Development/safe"
+vault_keyring_file = "$HOME/.si/vault/si-vault-keyring.json"
+token_ttl = "15m"
+refresh_session_ttl = "24h"
+run_ttl = "60s"
+secret_ttl = "120s"
+EOF
 
-./target/release/fortd
+./target/release/fortd --config-file .artifacts/local/fortd.toml
 ```
 
 ## CLI
@@ -129,11 +135,11 @@ viva deploy --file deploy/service.public.yaml
 ```
 
 Public domain config is in `deploy/service.public.yaml`.
-Both deploy manifests require `FORT_JWT_SIGNING_KEY_FILE` mounted from the host.
+Both deploy manifests require Fort config to reference mounted file-backed secrets and storage paths.
 The runtime contract stays file-backed in containerized deploys:
-- `FORT_JWT_SIGNING_KEY_FILE` must point to a mounted `0600` regular file
-- `FORT_VAULT_KEYRING_FILE` must point to a mounted `0600` regular file
-- `FORT_SAFE_ROOT` must point to the mounted `safe` directory
+- `jwt_signing_key_file` must point to a mounted `0600` regular file
+- `vault_keyring_file` must point to a mounted `0600` regular file
+- `safe_root` must point to the mounted `safe` directory
 
 `fortd` now fails at startup when the mounted safe root or SI Vault keyring path is missing or invalid, instead of deferring that failure until first secret access.
 
