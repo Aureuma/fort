@@ -4,15 +4,11 @@ meta:
   labels:
     app_code: fort
 router:
-  mode: traefik-file
+  mode: none
   domain: fort.aureuma.ai
   entrypoints:
     - websecure
   tls: true
-  traefik_file:
-    directory: /etc/traefik/dynamic
-    service_port: 8088
-    router_name_prefix: fort
 service:
   deploy_mode: inplace
   keep_previous: false
