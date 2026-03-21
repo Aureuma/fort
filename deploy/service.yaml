@@ -11,18 +11,6 @@ service:
   build:
     context: /home/shawn/Development/fort
     dockerfile: /home/shawn/Development/fort/Dockerfile
-  command:
-    - /usr/local/bin/fortd
-  env:
-    FORT_ADDR: ":8088"
-    FORT_STATE_PATH: "/var/lib/fort/state.json"
-    FORT_JWT_SIGNING_KEY_FILE: "/var/lib/fort/jwt-signing.key"
-    FORT_SAFE_ROOT: "/safe"
-    FORT_VAULT_KEYRING_FILE: "/var/lib/fort/si-vault-keyring.json"
-    FORT_TOKEN_TTL: "15m"
-    FORT_REFRESH_SESSION_TTL: "24h"
-    FORT_RUN_TTL: "60s"
-    FORT_SECRET_TTL: "120s"
   ports:
     - host: "0.0.0.0:18089"
       container: 8088
