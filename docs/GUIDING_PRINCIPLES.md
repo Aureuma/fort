@@ -60,7 +60,7 @@ Fort is not a secret database. It must remain a thin API wrapper over SI Vault-b
 - `backup_private_keys` sprawl is disallowed.
 
 ### Runtime Access Model
-- Runtime containers (Codex/Dyad) access secrets through `si fort ...`.
+- Runtime containers access secrets through `si fort ...`.
 - Direct local `si vault` secret commands are blocked in SI runtime containers.
 - Host/admin operations may use `si vault` for local maintenance workflows.
 - SI wrapper bootstrap/admin auth resolves from `FORT_BOOTSTRAP_TOKEN_FILE`.
