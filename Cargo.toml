@@ -40,3 +40,7 @@ path = "src/bin/fort-agent.rs"
 [[bin]]
 name = "fort-seed"
 path = "src/bin/fort-seed.rs"
+
+[[bin]]
+name = "fort-breakglass"
+path = "src/bin/fort-breakglass.rs"
