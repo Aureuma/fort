@@ -9,7 +9,6 @@ Fort is not a secret database. It must remain a thin API wrapper over SI Vault-b
 - Fort never persists secret plaintext key/value material.
 - Fort never exposes unauthenticated bootstrap or bypass paths.
 - Secret operations are policy-scoped by `repo/env/op`.
-- Sun is not in the SI Vault/Fort secret path.
 
 ## Authentication Model
 - Workloads use short-lived JWT access tokens.
@@ -34,7 +33,6 @@ Fort is not a secret database. It must remain a thin API wrapper over SI Vault-b
   - Fort container smoke flow
   - SI↔Fort↔Vault end-to-end flow
   - manual SI Vault decrypt parity checks
-- Removed/blocked architecture drift in docs toward Sun-coupled vault flow.
 
 ## Non-Goals
 - Fort-owned secret persistence
@@ -46,7 +44,6 @@ Fort is not a secret database. It must remain a thin API wrapper over SI Vault-b
 ### Scope Boundaries
 - SI Vault owns local `.env` encryption/decryption format and key material lifecycle.
 - Fort owns remote authentication/authorization and policy enforcement.
-- Sun is not part of SI Vault/Fort secret read-write flows.
 
 ### Secret Data Plane
 - Source of truth for secrets: `safe/<repo>/.env.<env>`.
@@ -89,4 +86,3 @@ Fort is not a secret database. It must remain a thin API wrapper over SI Vault-b
 - Fort-owned secret persistence
 - env-injected refresh/JWT signing secrets
 - SI Vault keypair sprawl across scopes
-- Sun coupling reintroduced into SI Vault/Fort secret path

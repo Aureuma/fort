@@ -13,7 +13,6 @@ Fort must not:
 - persist secret key/value material in Fort state
 - expose unauthenticated setup/bootstrap bypass paths
 - hold long-lived secret plaintext in process memory outside request scope
-- couple SI Vault secret flows to Sun
 
 Fort state is limited to:
 - agents
@@ -67,4 +66,3 @@ Treat the following as regressions:
 - auth bypass or hidden bootstrap path
 - Fort-owned secret persistence
 - env-injected refresh/JWT signing secrets
-- Sun coupling in SI Vault/Fort secret flow

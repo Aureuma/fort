@@ -21,7 +21,6 @@ Fort does:
 Fort does not:
 - store secret key/value material in Fort state
 - expose bootstrap/admin bypass keys
-- depend on Sun for SI Vault secret operations
 
 ## Guiding Principles
 - Fort is an authz/authn wrapper over SI Vault, not a second vault.
