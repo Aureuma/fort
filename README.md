@@ -72,7 +72,7 @@ run_ttl = "60s"
 secret_ttl = "120s"
 EOF
 
-./target/release/fortd --config-file .artifacts/local/fortd.toml
+./.artifacts/cargo-target/release/fortd --config-file .artifacts/local/fortd.toml
 ```
 
 ## CLI
