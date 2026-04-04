@@ -107,7 +107,7 @@ Deprecated token-value env vars are disallowed:
 - `FORT_TOKEN`
 - `FORT_REFRESH_TOKEN`
 
-For SI runtime containers, prefer the `si fort ...` wrapper path:
+For SI runtime workers, prefer the `si fort ...` wrapper path:
 - SI reads `FORT_TOKEN_PATH` / `FORT_REFRESH_TOKEN_PATH` file state
 - SI refreshes as needed
 - SI keeps auth file-based (no bearer token argv flow)

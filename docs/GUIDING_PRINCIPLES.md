@@ -57,8 +57,8 @@ Fort is not a secret database. It must remain a thin API wrapper over SI Vault-b
 - `backup_private_keys` sprawl is disallowed.
 
 ### Runtime Access Model
-- Runtime containers access secrets through `si fort ...`.
-- Direct local `si vault` secret commands are blocked in SI runtime containers.
+- Runtime workers access secrets through `si fort ...`.
+- Direct local `si vault` secret commands are blocked in SI runtime workers.
 - Host/admin operations may use `si vault` for local maintenance workflows.
 - SI wrapper bootstrap/admin auth resolves from `FORT_BOOTSTRAP_TOKEN_FILE`.
 - SI runtime sessions resolve from file paths `FORT_TOKEN_PATH` and `FORT_REFRESH_TOKEN_PATH`.
@@ -77,7 +77,7 @@ Fort is not a secret database. It must remain a thin API wrapper over SI Vault-b
 - Fort refresh token and signing key files: `0600`.
 
 ### Deployment Invariants
-- Hosted Fort endpoint is configured in `~/.si/fort/settings.toml` (`[fort].host` / `container_host`).
+- Hosted Fort endpoint is configured in `~/.si/fort/settings.toml` (`[fort].host` / `runtime_host`).
 - Public endpoint must be HTTPS.
 - Fort deploy path is via Viva manifests, not ad-hoc local-only exposure.
 
