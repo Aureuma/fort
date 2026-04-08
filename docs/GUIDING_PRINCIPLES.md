@@ -78,8 +78,10 @@ Fort is not a secret database. It must remain a thin API wrapper over SI Vault-b
 
 ### Deployment Invariants
 - Hosted Fort endpoint is configured in `~/.si/fort/settings.toml` (`[fort].host` / `runtime_host`).
-- Public endpoint must be HTTPS.
-- Fort deploy path is via Viva manifests, not ad-hoc local-only exposure.
+- Production and operator-facing Fort access must resolve through the public HTTPS endpoint, for example `https://fort.aureuma.ai`.
+- Loopback addresses, local container IPs, and ad-hoc private hostnames are not valid steady-state runtime endpoints for Fort-backed workflows.
+- Localhost and private-address exposure are permitted only for development, isolated integration tests, or break/fix debugging that is explicitly temporary.
+- Fort deploy path is via Viva manifests and public routing, not ad-hoc local-only exposure.
 
 ### Regression Definition
 - auth bypass or hidden bootstrap path
