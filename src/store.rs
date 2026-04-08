@@ -1,7 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
+use std::path::Path;
 use std::path::PathBuf;
 use std::sync::RwLock;
+use std::time::SystemTime;
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
@@ -39,10 +41,18 @@ struct PersistentState {
     audit: Vec<AuditEvent>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct DiskRevision {
+    exists: bool,
+    modified: Option<SystemTime>,
+    len: u64,
+}
+
 #[derive(Debug)]
 pub struct Store {
     path: Option<PathBuf>,
     state: RwLock<PersistentState>,
+    disk_revision: RwLock<Option<DiskRevision>>,
 }
 
 impl Store {
@@ -53,25 +63,68 @@ impl Store {
         } else {
             Some(PathBuf::from(path))
         };
-        let state = if let Some(path) = &resolved {
-            if !path.exists() {
-                PersistentState::default()
-            } else {
-                let raw = fs::read_to_string(path)
-                    .with_context(|| format!("read state {}", path.display()))?;
-                if raw.trim().is_empty() {
-                    PersistentState::default()
-                } else {
-                    serde_json::from_str(&raw).context("decode state")?
-                }
-            }
-        } else {
-            PersistentState::default()
-        };
+        let state = resolved
+            .as_deref()
+            .map(Self::load_state_from_path)
+            .transpose()?
+            .unwrap_or_default();
+        let disk_revision =
+            resolved.as_deref().map(Self::read_disk_revision).transpose()?;
         Ok(Self {
             path: resolved,
             state: RwLock::new(state),
+            disk_revision: RwLock::new(disk_revision),
         })
+    }
+
+    fn load_state_from_path(path: &Path) -> Result<PersistentState> {
+        if !path.exists() {
+            return Ok(PersistentState::default());
+        }
+        let raw =
+            fs::read_to_string(path).with_context(|| format!("read state {}", path.display()))?;
+        if raw.trim().is_empty() {
+            Ok(PersistentState::default())
+        } else {
+            serde_json::from_str(&raw).context("decode state")
+        }
+    }
+
+    fn read_disk_revision(path: &Path) -> Result<DiskRevision> {
+        match fs::metadata(path) {
+            Ok(metadata) => Ok(DiskRevision {
+                exists: true,
+                modified: metadata.modified().ok(),
+                len: metadata.len(),
+            }),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(DiskRevision {
+                exists: false,
+                modified: None,
+                len: 0,
+            }),
+            Err(error) => Err(error).with_context(|| format!("stat state {}", path.display())),
+        }
+    }
+
+    fn refresh_from_disk_if_stale(&self) -> Result<()> {
+        let Some(path) = self.path.as_deref() else {
+            return Ok(());
+        };
+        let next_revision = Self::read_disk_revision(path)?;
+        {
+            let loaded = self.disk_revision.read().expect("store revision lock poisoned");
+            if loaded.as_ref() == Some(&next_revision) {
+                return Ok(());
+            }
+        }
+        let next_state = Self::load_state_from_path(path)?;
+        {
+            let mut state = self.state.write().expect("store lock poisoned");
+            *state = next_state;
+        }
+        let mut revision = self.disk_revision.write().expect("store revision lock poisoned");
+        *revision = Some(next_revision);
+        Ok(())
     }
 
     fn persist_locked(&self, state: &PersistentState) -> Result<()> {
@@ -90,6 +143,9 @@ impl Store {
             let _ = fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600));
         }
         fs::rename(&tmp, path).with_context(|| format!("rename {}", path.display()))?;
+        let next_revision = Self::read_disk_revision(path)?;
+        let mut revision = self.disk_revision.write().expect("store revision lock poisoned");
+        *revision = Some(next_revision);
         Ok(())
     }
 
@@ -100,6 +156,8 @@ impl Store {
         status: Option<AgentStatus>,
         now: DateTime<Utc>,
     ) -> Result<Agent, StoreError> {
+        self.refresh_from_disk_if_stale()
+            .map_err(|_| StoreError::Invalid)?;
         let id = id.trim();
         if id.is_empty() {
             return Err(StoreError::Invalid);
@@ -123,6 +181,8 @@ impl Store {
     }
 
     pub fn get_agent(&self, id: &str) -> Result<Agent, StoreError> {
+        self.refresh_from_disk_if_stale()
+            .map_err(|_| StoreError::Invalid)?;
         self.state
             .read()
             .expect("store lock poisoned")
@@ -137,6 +197,7 @@ impl Store {
         filter_type: Option<AgentType>,
         filter_status: Option<AgentStatus>,
     ) -> Vec<Agent> {
+        let _ = self.refresh_from_disk_if_stale();
         let mut out: Vec<_> = self
             .state
             .read()
@@ -165,6 +226,8 @@ impl Store {
         status: AgentStatus,
         now: DateTime<Utc>,
     ) -> Result<Agent, StoreError> {
+        self.refresh_from_disk_if_stale()
+            .map_err(|_| StoreError::Invalid)?;
         let mut state = self.state.write().expect("store lock poisoned");
         let agent = state
             .agents
@@ -183,6 +246,8 @@ impl Store {
         id: &str,
         now: DateTime<Utc>,
     ) -> Result<(Agent, usize, usize), StoreError> {
+        self.refresh_from_disk_if_stale()
+            .map_err(|_| StoreError::Invalid)?;
         let mut state = self.state.write().expect("store lock poisoned");
         let agent = state
             .agents
@@ -213,6 +278,8 @@ impl Store {
     }
 
     pub fn remove_agent(&self, id: &str) -> Result<(), StoreError> {
+        self.refresh_from_disk_if_stale()
+            .map_err(|_| StoreError::Invalid)?;
         let id = id.trim();
         let mut state = self.state.write().expect("store lock poisoned");
         if state.agents.remove(id).is_none() {
@@ -230,6 +297,8 @@ impl Store {
     }
 
     pub fn get_policy(&self, agent_id: &str) -> Result<Policy, StoreError> {
+        self.refresh_from_disk_if_stale()
+            .map_err(|_| StoreError::Invalid)?;
         Ok(self
             .state
             .read()
@@ -285,6 +354,8 @@ impl Store {
         bindings: &[Binding],
         now: DateTime<Utc>,
     ) -> Result<Policy, StoreError> {
+        self.refresh_from_disk_if_stale()
+            .map_err(|_| StoreError::Invalid)?;
         let mut state = self.state.write().expect("store lock poisoned");
         if !state.agents.contains_key(agent_id.trim()) {
             return Err(StoreError::NotFound);
@@ -345,6 +416,7 @@ impl Store {
         env: &str,
         op: Operation,
     ) -> (bool, &'static str) {
+        let _ = self.refresh_from_disk_if_stale();
         let agent = match self.get_agent(agent_id) {
             Ok(agent) => agent,
             Err(_) => return (false, "agent_not_found"),
@@ -373,6 +445,8 @@ impl Store {
     }
 
     pub fn put_token(&self, record: TokenRecord) -> Result<(), StoreError> {
+        self.refresh_from_disk_if_stale()
+            .map_err(|_| StoreError::Invalid)?;
         if record.jti.trim().is_empty() {
             return Err(StoreError::Invalid);
         }
@@ -384,6 +458,8 @@ impl Store {
     }
 
     pub fn get_token(&self, jti: &str) -> Result<TokenRecord, StoreError> {
+        self.refresh_from_disk_if_stale()
+            .map_err(|_| StoreError::Invalid)?;
         self.state
             .read()
             .expect("store lock poisoned")
@@ -399,6 +475,7 @@ impl Store {
         active_only: bool,
         now: DateTime<Utc>,
     ) -> Vec<TokenRecord> {
+        let _ = self.refresh_from_disk_if_stale();
         let mut out: Vec<_> = self
             .state
             .read()
@@ -423,6 +500,8 @@ impl Store {
         reason: &str,
         now: DateTime<Utc>,
     ) -> Result<TokenRecord, StoreError> {
+        self.refresh_from_disk_if_stale()
+            .map_err(|_| StoreError::Invalid)?;
         let mut state = self.state.write().expect("store lock poisoned");
         let token = state
             .tokens
@@ -444,6 +523,8 @@ impl Store {
         reason: &str,
         now: DateTime<Utc>,
     ) -> Result<usize, StoreError> {
+        self.refresh_from_disk_if_stale()
+            .map_err(|_| StoreError::Invalid)?;
         if agent_id.trim().is_empty() {
             return Err(StoreError::Invalid);
         }
@@ -468,6 +549,8 @@ impl Store {
     }
 
     pub fn put_refresh_session(&self, session: RefreshSession) -> Result<(), StoreError> {
+        self.refresh_from_disk_if_stale()
+            .map_err(|_| StoreError::Invalid)?;
         if session.id.trim().is_empty()
             || session.agent_id.trim().is_empty()
             || session.refresh_token_hash.trim().is_empty()
@@ -485,6 +568,8 @@ impl Store {
     }
 
     pub fn get_refresh_session(&self, id: &str) -> Result<RefreshSession, StoreError> {
+        self.refresh_from_disk_if_stale()
+            .map_err(|_| StoreError::Invalid)?;
         self.state
             .read()
             .expect("store lock poisoned")
@@ -498,6 +583,8 @@ impl Store {
         &self,
         hash: &str,
     ) -> Result<(RefreshSession, bool), StoreError> {
+        self.refresh_from_disk_if_stale()
+            .map_err(|_| StoreError::Invalid)?;
         let state = self.state.read().expect("store lock poisoned");
         for session in state.refresh_sessions.values() {
             if session.refresh_token_hash == hash {
@@ -518,6 +605,8 @@ impl Store {
         next_hash: &str,
         now: DateTime<Utc>,
     ) -> Result<RefreshSession, StoreError> {
+        self.refresh_from_disk_if_stale()
+            .map_err(|_| StoreError::Invalid)?;
         let mut state = self.state.write().expect("store lock poisoned");
         let session = state
             .refresh_sessions
@@ -537,6 +626,8 @@ impl Store {
         id: &str,
         now: DateTime<Utc>,
     ) -> Result<RefreshSession, StoreError> {
+        self.refresh_from_disk_if_stale()
+            .map_err(|_| StoreError::Invalid)?;
         let mut state = self.state.write().expect("store lock poisoned");
         let session = state
             .refresh_sessions
@@ -557,6 +648,8 @@ impl Store {
         agent_id: &str,
         now: DateTime<Utc>,
     ) -> Result<usize, StoreError> {
+        self.refresh_from_disk_if_stale()
+            .map_err(|_| StoreError::Invalid)?;
         if agent_id.trim().is_empty() {
             return Err(StoreError::Invalid);
         }
@@ -581,6 +674,8 @@ impl Store {
     }
 
     pub fn put_session(&self, session: RunSession) -> Result<(), StoreError> {
+        self.refresh_from_disk_if_stale()
+            .map_err(|_| StoreError::Invalid)?;
         if session.id.trim().is_empty() {
             return Err(StoreError::Invalid);
         }
@@ -595,6 +690,8 @@ impl Store {
     }
 
     pub fn get_session(&self, id: &str) -> Result<RunSession, StoreError> {
+        self.refresh_from_disk_if_stale()
+            .map_err(|_| StoreError::Invalid)?;
         self.state
             .read()
             .expect("store lock poisoned")
@@ -609,6 +706,8 @@ impl Store {
         id: &str,
         now: DateTime<Utc>,
     ) -> Result<RunSession, StoreError> {
+        self.refresh_from_disk_if_stale()
+            .map_err(|_| StoreError::Invalid)?;
         let mut state = self.state.write().expect("store lock poisoned");
         let session = state
             .sessions
@@ -626,6 +725,8 @@ impl Store {
     }
 
     pub fn close_session(&self, id: &str) -> Result<(), StoreError> {
+        self.refresh_from_disk_if_stale()
+            .map_err(|_| StoreError::Invalid)?;
         let mut state = self.state.write().expect("store lock poisoned");
         if state.sessions.remove(id.trim()).is_none() {
             return Err(StoreError::NotFound);
@@ -636,6 +737,8 @@ impl Store {
     }
 
     pub fn add_audit(&self, mut event: AuditEvent) -> Result<(), StoreError> {
+        self.refresh_from_disk_if_stale()
+            .map_err(|_| StoreError::Invalid)?;
         let mut state = self.state.write().expect("store lock poisoned");
         if event.created_at.timestamp() == 0 {
             event.created_at = Utc::now();
@@ -651,6 +754,7 @@ impl Store {
     }
 
     pub fn list_audit(&self, limit: usize) -> Vec<AuditEvent> {
+        let _ = self.refresh_from_disk_if_stale();
         let state = self.state.read().expect("store lock poisoned");
         let actual = if limit == 0 || limit > state.audit.len() {
             state.audit.len()
@@ -658,5 +762,55 @@ impl Store {
             limit
         };
         state.audit.iter().rev().take(actual).cloned().collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+    use tempfile::tempdir;
+
+    #[test]
+    fn store_reads_external_agent_changes_from_disk() {
+        let temp = tempdir().expect("tempdir");
+        let path = temp.path().join("state.json");
+        let store_a = Store::new(path.to_str().expect("path")).expect("store a");
+        let store_b = Store::new(path.to_str().expect("path")).expect("store b");
+        let now = Utc::now();
+
+        store_a
+            .create_agent("agent-alpha", Some(AgentType::Workload), Some(AgentStatus::Active), now)
+            .expect("create alpha");
+        store_b
+            .create_agent("agent-beta", Some(AgentType::Workload), Some(AgentStatus::Active), now)
+            .expect("create beta");
+
+        let loaded = store_a.get_agent("agent-beta").expect("load beta from refreshed disk");
+        assert_eq!(loaded.id, "agent-beta");
+    }
+
+    #[test]
+    fn store_preserves_external_changes_before_writing() {
+        let temp = tempdir().expect("tempdir");
+        let path = temp.path().join("state.json");
+        let store_a = Store::new(path.to_str().expect("path")).expect("store a");
+        let store_b = Store::new(path.to_str().expect("path")).expect("store b");
+        let now = Utc::now();
+
+        store_a
+            .create_agent("agent-alpha", Some(AgentType::Workload), Some(AgentStatus::Active), now)
+            .expect("create alpha");
+        store_b
+            .create_agent("agent-beta", Some(AgentType::Workload), Some(AgentStatus::Active), now)
+            .expect("create beta");
+        store_a
+            .create_agent("agent-gamma", Some(AgentType::Workload), Some(AgentStatus::Active), now)
+            .expect("create gamma");
+
+        let store_c = Store::new(path.to_str().expect("path")).expect("store c");
+        let agents = store_c.list_agents(None, None);
+        let ids = agents.into_iter().map(|agent| agent.id).collect::<Vec<_>>();
+        assert_eq!(ids, vec!["agent-alpha", "agent-beta", "agent-gamma"]);
     }
 }
