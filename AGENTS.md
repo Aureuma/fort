@@ -32,6 +32,12 @@ Fort state is limited to:
 - Refresh tokens and JWT signing keys are file-backed secrets only (`0600`), never env-injected secret values.
 - SI Vault ciphertext files (`safe/<repo>/.env.<env>`) must be regular files with `0600` (or stricter).
 
+## Secret Access Discipline
+- For operator workflows, runtime checks, bootstrap verification, and any credential or secret access, use `si fort` as the entry point rather than bypassing Fort with raw `si vault` commands or ad-hoc secret files.
+- Fort may call SI Vault-backed code internally as its implementation detail, but agents working on the repo should not jump around Fort for real secret access.
+- Direct Vault usage is limited to explicit Fort maintenance, isolated tests, or code paths whose purpose is implementing the Fort-to-Vault data plane.
+- Keep `docs/GUIDING_PRINCIPLES.md` in mind for secret-related work, especially public HTTPS runtime access, file-backed tokens, scoped policy enforcement, and Fort remaining the auth boundary over SI Vault-backed `safe` data.
+
 ## Provisioning and Bootstrap
 - There is no production seeding/bootstrap shortcut.
 - Operational provisioning is explicit and authenticated:
