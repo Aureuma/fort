@@ -4,8 +4,13 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{bail, Context, Result};
 use serde::Deserialize;
+
+pub const DEFAULT_TOKEN_TTL: Duration = Duration::from_secs(15 * 60);
+pub const DEFAULT_REFRESH_SESSION_TTL: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+pub const DEFAULT_RUN_TTL: Duration = Duration::from_secs(60);
+pub const DEFAULT_SECRET_TTL: Duration = Duration::from_secs(120);
 
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -50,13 +55,13 @@ impl Config {
             safe_root: env_or("FORT_SAFE_ROOT", "/safe"),
             keyring_path: env_or("FORT_VAULT_KEYRING_FILE", &default_vault_keyring_path()),
             extra_private_keys: split_csv(&env_or("FORT_VAULT_PRIVATE_KEYS", "")),
-            token_ttl: parse_duration_env("FORT_TOKEN_TTL", Duration::from_secs(15 * 60)),
+            token_ttl: parse_duration_env("FORT_TOKEN_TTL", DEFAULT_TOKEN_TTL),
             refresh_session_ttl: parse_duration_env(
                 "FORT_REFRESH_SESSION_TTL",
-                Duration::from_secs(24 * 60 * 60),
+                DEFAULT_REFRESH_SESSION_TTL,
             ),
-            run_ttl: parse_duration_env("FORT_RUN_TTL", Duration::from_secs(60)),
-            secret_ttl: parse_duration_env("FORT_SECRET_TTL", Duration::from_secs(120)),
+            run_ttl: parse_duration_env("FORT_RUN_TTL", DEFAULT_RUN_TTL),
+            secret_ttl: parse_duration_env("FORT_SECRET_TTL", DEFAULT_SECRET_TTL),
         })
     }
 
@@ -92,19 +97,13 @@ impl Config {
                 .map(|value| value.trim().to_owned())
                 .filter(|value| !value.is_empty())
                 .collect(),
-            token_ttl: parse_duration_value(
-                parsed.token_ttl.as_deref(),
-                Duration::from_secs(15 * 60),
-            ),
+            token_ttl: parse_duration_value(parsed.token_ttl.as_deref(), DEFAULT_TOKEN_TTL),
             refresh_session_ttl: parse_duration_value(
                 parsed.refresh_session_ttl.as_deref(),
-                Duration::from_secs(24 * 60 * 60),
+                DEFAULT_REFRESH_SESSION_TTL,
             ),
-            run_ttl: parse_duration_value(parsed.run_ttl.as_deref(), Duration::from_secs(60)),
-            secret_ttl: parse_duration_value(
-                parsed.secret_ttl.as_deref(),
-                Duration::from_secs(120),
-            ),
+            run_ttl: parse_duration_value(parsed.run_ttl.as_deref(), DEFAULT_RUN_TTL),
+            secret_ttl: parse_duration_value(parsed.secret_ttl.as_deref(), DEFAULT_SECRET_TTL),
         })
     }
 }
@@ -242,5 +241,61 @@ mod humantime_compat {
             return None;
         }
         Some(total)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::fs;
+    use std::os::unix::fs::PermissionsExt;
+
+    use super::*;
+
+    #[test]
+    fn file_config_defaults_normal_refresh_sessions_to_thirty_days() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let signing_key = dir.path().join("fort-jwt-signing.key");
+        fs::write(&signing_key, "test-signing-key-that-is-long-enough").expect("write key");
+        fs::set_permissions(&signing_key, fs::Permissions::from_mode(0o600))
+            .expect("set key permissions");
+
+        let config_path = dir.path().join("fort.toml");
+        fs::write(
+            &config_path,
+            format!("jwt_signing_key_file = \"{}\"\n", signing_key.display()),
+        )
+        .expect("write config");
+
+        let config = Config::from_file(&config_path).expect("load config");
+        assert_eq!(config.refresh_session_ttl, DEFAULT_REFRESH_SESSION_TTL);
+        assert_eq!(
+            config.refresh_session_ttl,
+            Duration::from_secs(30 * 24 * 60 * 60)
+        );
+    }
+
+    #[test]
+    fn file_config_accepts_explicit_refresh_session_ttl() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let signing_key = dir.path().join("fort-jwt-signing.key");
+        fs::write(&signing_key, "test-signing-key-that-is-long-enough").expect("write key");
+        fs::set_permissions(&signing_key, fs::Permissions::from_mode(0o600))
+            .expect("set key permissions");
+
+        let config_path = dir.path().join("fort.toml");
+        fs::write(
+            &config_path,
+            format!(
+                "jwt_signing_key_file = \"{}\"\nrefresh_session_ttl = \"12h\"\n",
+                signing_key.display()
+            ),
+        )
+        .expect("write config");
+
+        let config = Config::from_file(&config_path).expect("load config");
+        assert_eq!(
+            config.refresh_session_ttl,
+            Duration::from_secs(12 * 60 * 60)
+        );
     }
 }

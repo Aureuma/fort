@@ -66,6 +66,7 @@ Fort is not a secret database. It must remain a thin API wrapper over SI Vault-b
 ### Token & Session Security
 - Access tokens are short-lived JWT bearer tokens.
 - Refresh sessions use rotating opaque refresh tokens with reuse detection.
+- Normal operator refresh sessions are bounded and default to 30 days unless explicitly shortened for a workload.
 - Single active refresh session per agent.
 - Refresh and signing secrets are file-backed only (`0600`), not env-injected secret values.
 - For `si fort` wrapper calls, native `fort` flags should be passed after `--`.

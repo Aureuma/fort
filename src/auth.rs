@@ -2,12 +2,13 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
-use jsonwebtoken::{Algorithm, DecodingKey, EncodingKey, Header, Validation, decode, encode};
+use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
+use crate::config::{DEFAULT_REFRESH_SESSION_TTL, DEFAULT_TOKEN_TTL};
 use crate::model::{Agent, AgentStatus, RefreshSession, TokenRecord};
 use crate::store::{Store, StoreError};
 
@@ -139,12 +140,12 @@ impl Manager {
         audience: &str,
     ) -> Result<(String, TokenRecord, RefreshSession, String), AuthError> {
         let access_ttl = if access_ttl.is_zero() {
-            Duration::from_secs(15 * 60)
+            DEFAULT_TOKEN_TTL
         } else {
             access_ttl
         };
         let refresh_ttl = if refresh_ttl.is_zero() {
-            Duration::from_secs(24 * 60 * 60)
+            DEFAULT_REFRESH_SESSION_TTL
         } else {
             refresh_ttl
         };

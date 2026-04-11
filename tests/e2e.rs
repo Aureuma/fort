@@ -36,7 +36,7 @@ fn fort_e2e_roundtrip_preserves_vault_ciphertext_contract() {
     fs::write(
         &config_path,
         format!(
-            "addr = \"{addr}\"\nstate_path = \"{}\"\njwt_signing_key_file = \"{}\"\nsafe_root = \"{}\"\nvault_keyring_file = \"{}\"\ntoken_ttl = \"15m\"\nrefresh_session_ttl = \"24h\"\nrun_ttl = \"60s\"\nsecret_ttl = \"120s\"\n",
+            "addr = \"{addr}\"\nstate_path = \"{}\"\njwt_signing_key_file = \"{}\"\nsafe_root = \"{}\"\nvault_keyring_file = \"{}\"\ntoken_ttl = \"15m\"\nrefresh_session_ttl = \"30d\"\nrun_ttl = \"60s\"\nsecret_ttl = \"120s\"\n",
             state_path.display(),
             signing_key_path.display(),
             safe_root.display(),

@@ -67,7 +67,7 @@ jwt_signing_key_file = "$PWD/.artifacts/local/fort-jwt-signing.key"
 safe_root = "/home/shawn/Development/safe"
 vault_keyring_file = "$HOME/.si/vault/si-vault-keyring.json"
 token_ttl = "15m"
-refresh_session_ttl = "24h"
+refresh_session_ttl = "30d"
 run_ttl = "60s"
 secret_ttl = "120s"
 EOF
