@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result, anyhow, bail};
 use clap::{Args, Parser, Subcommand};
 use reqwest::Method;
 use reqwest::blocking::Client as HttpClient;
@@ -378,6 +378,7 @@ impl Client {
     fn cmd_doctor(&self) -> Result<()> {
         let (health_status, health) = self.api_request(Method::GET, "/v1/health", None, false)?;
         let (ready_status, ready) = self.api_request(Method::GET, "/v1/ready", None, false)?;
+        let mut auth_error = None;
         let mut out = json!({
             "host": self.host,
             "health_status": health_status,
@@ -385,24 +386,42 @@ impl Client {
             "ready_status": ready_status,
             "ready": ready
         });
-        if !self.token.is_empty()
-            && let Ok((status, whoami)) =
-                self.api_request(Method::GET, "/v1/auth/whoami", None, true)
-        {
-            out["whoami_status"] = json!(status);
-            out["whoami"] = whoami;
+        if !self.token.is_empty() {
+            match self.api_request(Method::GET, "/v1/auth/whoami", None, true) {
+                Ok((status, whoami)) => {
+                    out["whoami_status"] = json!(status);
+                    out["whoami"] = whoami;
+                    if status != 200 {
+                        auth_error = Some(anyhow!("fort auth check failed with status {status}"));
+                    }
+                }
+                Err(error) => {
+                    let detail = error.to_string();
+                    out["whoami_error"] = json!(detail);
+                    auth_error = Some(error.context("fort auth check failed"));
+                }
+            }
         }
         if self.json {
-            print_json(&out)
+            print_json(&out)?;
         } else {
             println!("host: {}", self.host);
             println!("health: {}", health_status);
             println!("ready: {}", ready_status);
-            if out.get("whoami").is_some() {
-                println!("auth: ok ({})", out["whoami"]);
+            if let Some(status) = out.get("whoami_status").and_then(Value::as_u64) {
+                if status == 200 {
+                    println!("auth: ok ({})", out["whoami"]);
+                } else {
+                    println!("auth: failed status={} ({})", status, out["whoami"]);
+                }
+            } else if out.get("whoami_error").is_some() {
+                println!("auth: failed ({})", out["whoami_error"]);
             }
-            Ok(())
         }
+        if let Some(error) = auth_error {
+            return Err(error);
+        }
+        Ok(())
     }
 
     fn cmd_auth(&self, command: AuthSubcommand) -> Result<()> {

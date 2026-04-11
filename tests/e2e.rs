@@ -58,6 +58,20 @@ fn fort_e2e_roundtrip_preserves_vault_ciphertext_contract() {
             .ok()
             .is_some_and(|status| status.success())
     });
+    let invalid_token_path = state_dir.join("invalid.token");
+    fs::write(&invalid_token_path, b"invalid-token\n").expect("write invalid token");
+    set_0600(&invalid_token_path);
+    run_fails(
+        &fort,
+        &[
+            "--host",
+            &host,
+            "--token-file",
+            invalid_token_path.to_str().unwrap(),
+            "doctor",
+        ],
+        "auth: failed",
+    );
 
     run_ok(
         &fort,
@@ -285,6 +299,25 @@ fn run_capture(bin: &str, args: &[&str]) -> String {
         String::from_utf8_lossy(&output.stderr)
     );
     String::from_utf8(output.stdout).expect("utf8 stdout")
+}
+
+fn run_fails(bin: &str, args: &[&str], expected_stdout: &str) {
+    let output = Command::new(bin).args(args).output().expect("run command");
+    assert!(
+        !output.status.success(),
+        "command succeeded unexpectedly: {} {:?}\nstdout={}\nstderr={}",
+        bin,
+        args,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains(expected_stdout),
+        "command stdout missing {:?}: stdout={} stderr={}",
+        expected_stdout,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
 }
 
 fn set_0600(path: &PathBuf) {
