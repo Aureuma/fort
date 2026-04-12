@@ -37,6 +37,7 @@ Fort state is limited to:
 - Fort may call SI Vault-backed code internally as its implementation detail, but agents working on the repo should not jump around Fort for real secret access.
 - Direct Vault usage is limited to explicit Fort maintenance, isolated tests, or code paths whose purpose is implementing the Fort-to-Vault data plane.
 - Keep `docs/GUIDING_PRINCIPLES.md` in mind for secret-related work, especially public HTTPS runtime access, file-backed tokens, scoped policy enforcement, and Fort remaining the auth boundary over SI Vault-backed `safe` data.
+- `safe` is the literal name of the separate repository that stores encrypted secret material; it is not a generic label or an arbitrary local folder.
 
 ## Provisioning and Bootstrap
 - There is no production seeding/bootstrap shortcut.
