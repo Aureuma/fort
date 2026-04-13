@@ -61,7 +61,7 @@ Fort is not a secret database. It must remain a thin API wrapper over SI Vault-b
 - Direct local `si vault` secret commands are blocked in SI runtime workers.
 - Host/admin operations may use `si vault` for local maintenance workflows.
 - SI wrapper bootstrap/admin auth resolves from `FORT_BOOTSTRAP_TOKEN_FILE`.
-- SI runtime sessions resolve from file paths `FORT_TOKEN_PATH` and `FORT_REFRESH_TOKEN_PATH`.
+- SI runtime sessions resolve from the managed Codex profile session under `CODEX_HOME/fort/`; `FORT_TOKEN_PATH` and `FORT_REFRESH_TOKEN_PATH` are internal runtime env values, not general operator fallbacks.
 
 ### Token & Session Security
 - Access tokens are short-lived JWT bearer tokens.

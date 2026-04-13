@@ -103,12 +103,14 @@ CLI token sources:
 2. `FORT_TOKEN_PATH`
 3. `FORT_BOOTSTRAP_TOKEN_FILE`
 
+Use `FORT_TOKEN_PATH` only for managed runtime environments. SI-managed Codex runtime auth is owned by `si codex spawn` / `si codex shell`, which pass explicit token files to native `fort`.
+
 Deprecated token-value env vars are disallowed:
 - `FORT_TOKEN`
 - `FORT_REFRESH_TOKEN`
 
 For SI runtime workers, prefer the `si fort ...` wrapper path:
-- SI reads `FORT_TOKEN_PATH` / `FORT_REFRESH_TOKEN_PATH` file state
+- SI reads the managed Codex profile session under `CODEX_HOME/fort/`
 - SI refreshes as needed
 - SI keeps auth file-based (no bearer token argv flow)
 
@@ -124,6 +126,7 @@ si fort -- --host https://fort.aureuma.ai doctor
   - `fort auth session open --agent <id> --refresh-token-out <path>`
   - `fort auth session refresh --refresh-token-file <path> [--refresh-token-out <path>]`
   - `fort-agent --refresh-token-file <path> --token-path <path>`
+- Codex profile refresh tokens under `~/.si/codex/profiles/<profile>/fort/refresh.token` must be refreshed in place.
 - Refresh token files must be regular files with `0600` (or stricter) permissions.
 - `fort-agent` enforces regular-file checks and strict permission checks on refresh-token files.
 

@@ -65,7 +65,7 @@ Fort state is limited to:
   - workload refresh-token file paths used by `fort-agent`
 - SI wrapper contract:
   - bootstrap/admin auth file: `FORT_BOOTSTRAP_TOKEN_FILE`
-  - runtime session files: `FORT_TOKEN_PATH`, `FORT_REFRESH_TOKEN_PATH`
+  - runtime session files: managed `CODEX_HOME/fort/access.token` and `CODEX_HOME/fort/refresh.token`
   - pass native `fort` flags after `--` when invoking via `si fort`
 
 ## Regression Policy

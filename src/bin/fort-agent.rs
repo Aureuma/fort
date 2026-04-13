@@ -10,7 +10,7 @@ struct Cli {
     host: Option<String>,
     #[arg(long)]
     refresh_token_file: Option<String>,
-    #[arg(long, default_value = "/tmp/fort/access.token")]
+    #[arg(long, default_value = "/run/si/fort/access.token")]
     token_path: String,
     #[arg(long, default_value_t = 0.70)]
     refresh_ratio: f64,

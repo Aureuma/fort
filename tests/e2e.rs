@@ -238,6 +238,47 @@ fn fort_backend_fails_fast_when_safe_root_or_keyring_mounts_are_wrong() {
     assert!(open_keyring.is_err(), "open keyring permissions must fail");
 }
 
+#[test]
+fn fort_cli_rejects_codex_profile_refresh_token_rotation_to_detached_path() {
+    let temp = TempDir::new().expect("tempdir");
+    let refresh_path = temp
+        .path()
+        .join(".si/codex/profiles/profile-zeta/fort/refresh.token");
+    fs::create_dir_all(refresh_path.parent().expect("refresh parent")).expect("mkdir fort dir");
+    fs::write(&refresh_path, "profile-refresh-token\n").expect("write profile refresh token");
+    set_0600(&refresh_path);
+    let out_path = temp.path().join("detached-refresh.token");
+    let fort = std::env::var("CARGO_BIN_EXE_fort").expect("fort path");
+    let output = Command::new(fort)
+        .args([
+            "--host",
+            "http://127.0.0.1:1",
+            "auth",
+            "session",
+            "refresh",
+            "--refresh-token-file",
+            refresh_path.to_str().expect("refresh path"),
+            "--refresh-token-out",
+            out_path.to_str().expect("out path"),
+        ])
+        .output()
+        .expect("run fort refresh");
+
+    assert!(
+        !output.status.success(),
+        "refresh succeeded unexpectedly: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !out_path.exists(),
+        "detached refresh token should not be written"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("refusing to rotate Codex profile Fort refresh token"));
+    assert!(stderr.contains("refreshed in place"));
+}
+
 fn seed_state(state_path: &PathBuf, keyring_path: &PathBuf, signing_key_path: &PathBuf) -> String {
     let seed = std::env::var("CARGO_BIN_EXE_fort-seed").expect("fort-seed path");
     let output = Command::new(seed)

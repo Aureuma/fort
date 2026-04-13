@@ -3,7 +3,7 @@ use std::env;
 use std::fs;
 use std::io::{self, Write};
 use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
+use std::path::{Component, Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
@@ -555,10 +555,14 @@ impl Client {
                 }
             }
             AuthSessionSubcommand::Refresh(args) => {
-                let refresh_token = read_secret_file(&args.refresh_token_file)?;
                 let out_path = args
                     .refresh_token_out
                     .unwrap_or_else(|| args.refresh_token_file.clone());
+                guard_codex_profile_refresh_token_rotation(
+                    Path::new(&args.refresh_token_file),
+                    Path::new(&out_path),
+                )?;
+                let refresh_token = read_secret_file(&args.refresh_token_file)?;
                 let (status, mut response) = self.api_request(
                     Method::POST,
                     "/v1/auth/session/refresh",
@@ -973,6 +977,56 @@ fn resolve_token(flag_token_file: Option<String>) -> Result<String> {
         }
     }
     Ok(String::new())
+}
+
+fn guard_codex_profile_refresh_token_rotation(
+    refresh_token_file: &Path,
+    refresh_token_out: &Path,
+) -> Result<()> {
+    if !is_codex_profile_refresh_token_path(refresh_token_file) {
+        return Ok(());
+    }
+    let refresh_token_file = normalize_path_components(refresh_token_file.to_path_buf());
+    let refresh_token_out = normalize_path_components(refresh_token_out.to_path_buf());
+    if refresh_token_file != refresh_token_out {
+        bail!(
+            "refusing to rotate Codex profile Fort refresh token {} into {}; profile refresh tokens must be refreshed in place",
+            refresh_token_file.display(),
+            refresh_token_out.display()
+        );
+    }
+    Ok(())
+}
+
+fn is_codex_profile_refresh_token_path(path: &Path) -> bool {
+    let normalized = normalize_path_components(path.to_path_buf());
+    let parts = normalized
+        .components()
+        .filter_map(|component| match component {
+            Component::Normal(value) => value.to_str(),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    parts.len() >= 6
+        && parts[parts.len() - 1] == "refresh.token"
+        && parts[parts.len() - 2] == "fort"
+        && parts[parts.len() - 4] == "profiles"
+        && parts[parts.len() - 5] == "codex"
+        && parts[parts.len() - 6] == ".si"
+}
+
+fn normalize_path_components(path: PathBuf) -> PathBuf {
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            _ => normalized.push(component.as_os_str()),
+        }
+    }
+    normalized
 }
 
 fn reject_deprecated_token_value_env() -> Result<()> {
