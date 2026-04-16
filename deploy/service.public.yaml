@@ -3,6 +3,8 @@ meta:
   name: fort-api
   labels:
     app_code: fort
+    stage: prod
+    component: api
 router:
   mode: none
   domain: fort.aureuma.ai
