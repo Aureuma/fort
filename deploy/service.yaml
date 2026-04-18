@@ -23,4 +23,4 @@ service:
     - "/var/lib/fort:/var/lib/fort"
     - "/home/shawn/Development/safe:/safe"
   health:
-    kind: none
+    kind: container
