@@ -33,6 +33,7 @@ Fort state is limited to:
 - SI Vault ciphertext files (`safe/<repo>/.env.<env>`) must be regular files with `0600` (or stricter).
 
 ## Secret Access Discipline
+- `si fort` is the canonical interface for secret and credential management across SI-owned repos and operator workflows; direct `si vault` usage exists only as a Fort implementation or maintenance detail.
 - For operator workflows, runtime checks, bootstrap verification, and any credential or secret access, use `si fort` as the entry point rather than bypassing Fort with raw `si vault` commands or ad-hoc secret files.
 - Fort may call SI Vault-backed code internally as its implementation detail, but agents working on the repo should not jump around Fort for real secret access.
 - Direct Vault usage is limited to explicit Fort maintenance, isolated tests, or code paths whose purpose is implementing the Fort-to-Vault data plane.
