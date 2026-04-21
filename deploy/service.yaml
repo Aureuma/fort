@@ -2,6 +2,7 @@ kind: service
 meta:
   name: fort-api
   labels:
+    app: fort
     app_code: fort
     stage: prod
     component: api
