@@ -10,6 +10,8 @@ router:
   mode: none
 service:
   deploy_mode: inplace
+  hardening:
+    profile: disabled
   keep_previous: false
   build:
     context: /home/shawn/Development/fort
