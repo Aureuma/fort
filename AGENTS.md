@@ -83,3 +83,8 @@ Treat the following as regressions:
 - The canonical hard-coded version source is the root `Cargo.toml` under `[package].version`.
 - Docs, release automation, packaging metadata, and examples must reference that version instead of introducing another independently maintained repo version.
 - Every commit that changes tracked content in this repo must bump the patch version there in the same commit.
+
+### File Names And Paths
+
+- Name new files with stable, descriptive kebab-case unless the repo already has a stricter local convention; keep Viva deploy surfaces predictable with `deploy/viva.<env>.yaml`, `deploy/viva.<component>.<env>.yaml`, and `docker-compose.viva.<env>.yml`.
+- Keep file paths predictable and reviewable: avoid unrelated renames, generated churn, and mixed concerns; when moving or renaming files, update all references in the same change.
