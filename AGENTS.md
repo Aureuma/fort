@@ -8,6 +8,9 @@ Fort stays intentionally thin:
 - authorize by policy bindings (`repo/env/op`)
 - route secret operations to SI Vault-backed material in `safe`
 
+## Repository Hygiene
+- Keep every `tickets/` directory and all files beneath it ignored by Git. Do not add, force-add, or commit ticket files to version control.
+
 ## Hard Boundaries
 Fort must not:
 - persist secret key/value material in Fort state
@@ -80,4 +83,3 @@ Treat the following as regressions:
 - The canonical hard-coded version source is the root `Cargo.toml` under `[package].version`.
 - Docs, release automation, packaging metadata, and examples must reference that version instead of introducing another independently maintained repo version.
 - Every commit that changes tracked content in this repo must bump the patch version there in the same commit.
-
