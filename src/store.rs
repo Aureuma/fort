@@ -68,8 +68,10 @@ impl Store {
             .map(Self::load_state_from_path)
             .transpose()?
             .unwrap_or_default();
-        let disk_revision =
-            resolved.as_deref().map(Self::read_disk_revision).transpose()?;
+        let disk_revision = resolved
+            .as_deref()
+            .map(Self::read_disk_revision)
+            .transpose()?;
         Ok(Self {
             path: resolved,
             state: RwLock::new(state),
@@ -112,7 +114,10 @@ impl Store {
         };
         let next_revision = Self::read_disk_revision(path)?;
         {
-            let loaded = self.disk_revision.read().expect("store revision lock poisoned");
+            let loaded = self
+                .disk_revision
+                .read()
+                .expect("store revision lock poisoned");
             if loaded.as_ref() == Some(&next_revision) {
                 return Ok(());
             }
@@ -122,7 +127,10 @@ impl Store {
             let mut state = self.state.write().expect("store lock poisoned");
             *state = next_state;
         }
-        let mut revision = self.disk_revision.write().expect("store revision lock poisoned");
+        let mut revision = self
+            .disk_revision
+            .write()
+            .expect("store revision lock poisoned");
         *revision = Some(next_revision);
         Ok(())
     }
@@ -144,7 +152,10 @@ impl Store {
         }
         fs::rename(&tmp, path).with_context(|| format!("rename {}", path.display()))?;
         let next_revision = Self::read_disk_revision(path)?;
-        let mut revision = self.disk_revision.write().expect("store revision lock poisoned");
+        let mut revision = self
+            .disk_revision
+            .write()
+            .expect("store revision lock poisoned");
         *revision = Some(next_revision);
         Ok(())
     }
@@ -780,13 +791,25 @@ mod tests {
         let now = Utc::now();
 
         store_a
-            .create_agent("agent-alpha", Some(AgentType::Workload), Some(AgentStatus::Active), now)
+            .create_agent(
+                "agent-alpha",
+                Some(AgentType::Workload),
+                Some(AgentStatus::Active),
+                now,
+            )
             .expect("create alpha");
         store_b
-            .create_agent("agent-beta", Some(AgentType::Workload), Some(AgentStatus::Active), now)
+            .create_agent(
+                "agent-beta",
+                Some(AgentType::Workload),
+                Some(AgentStatus::Active),
+                now,
+            )
             .expect("create beta");
 
-        let loaded = store_a.get_agent("agent-beta").expect("load beta from refreshed disk");
+        let loaded = store_a
+            .get_agent("agent-beta")
+            .expect("load beta from refreshed disk");
         assert_eq!(loaded.id, "agent-beta");
     }
 
@@ -799,13 +822,28 @@ mod tests {
         let now = Utc::now();
 
         store_a
-            .create_agent("agent-alpha", Some(AgentType::Workload), Some(AgentStatus::Active), now)
+            .create_agent(
+                "agent-alpha",
+                Some(AgentType::Workload),
+                Some(AgentStatus::Active),
+                now,
+            )
             .expect("create alpha");
         store_b
-            .create_agent("agent-beta", Some(AgentType::Workload), Some(AgentStatus::Active), now)
+            .create_agent(
+                "agent-beta",
+                Some(AgentType::Workload),
+                Some(AgentStatus::Active),
+                now,
+            )
             .expect("create beta");
         store_a
-            .create_agent("agent-gamma", Some(AgentType::Workload), Some(AgentStatus::Active), now)
+            .create_agent(
+                "agent-gamma",
+                Some(AgentType::Workload),
+                Some(AgentStatus::Active),
+                now,
+            )
             .expect("create gamma");
 
         let store_c = Store::new(path.to_str().expect("path")).expect("store c");
