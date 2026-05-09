@@ -53,7 +53,13 @@ fn fort_e2e_roundtrip_preserves_vault_ciphertext_contract() {
         .expect("spawn fortd");
     wait_for(Duration::from_secs(10), || {
         Command::new(&fort)
-            .args(["--host", &host, "doctor"])
+            .args([
+                "--host",
+                &host,
+                "--token-file",
+                admin_token_path.to_str().expect("admin token path"),
+                "doctor",
+            ])
             .status()
             .ok()
             .is_some_and(|status| status.success())
