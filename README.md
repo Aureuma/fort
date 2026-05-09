@@ -126,7 +126,9 @@ si fort -- --host https://fort.aureuma.ai doctor
   - `fort auth session open --agent <id> --refresh-token-out <path>`
   - `fort auth session refresh --refresh-token-file <path> [--refresh-token-out <path>]`
   - `fort-agent --refresh-token-file <path> --token-path <path>`
-- Codex profile refresh tokens under `~/.si/codex/profiles/<profile>/fort/refresh.token` must be refreshed in place.
+- Codex profile refresh tokens must be refreshed in place:
+  - `~/.si/codex/profiles/<profile>/fort/refresh.token` for `primary`
+  - `~/.si/codex/profiles/<profile>/workers/<slot>/fort/refresh.token` for non-primary slots
 - Refresh token files must be regular files with `0600` (or stricter) permissions.
 - `fort-agent` enforces regular-file checks and strict permission checks on refresh-token files.
 
