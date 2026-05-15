@@ -8,3 +8,5 @@ target/
 *.log
 *.tmp
 fort-state.json
+
+inbox/
