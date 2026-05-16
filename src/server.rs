@@ -814,6 +814,7 @@ async fn handle_secret_set(
         .vault
         .set(repo, env, key, &request.value)
         .map_err(|error| match error {
+            VaultError::NotFound => ApiError::new(StatusCode::NOT_FOUND, "secret scope not found"),
             VaultError::Invalid => ApiError::new(StatusCode::BAD_REQUEST, "invalid secret target"),
             _ => ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "set failed"),
         })?;
