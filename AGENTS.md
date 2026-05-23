@@ -89,6 +89,24 @@ Treat the following as regressions:
 - Name new files with stable, descriptive kebab-case unless the repo already has a stricter local convention; keep Viva deploy surfaces predictable with `deploy/viva.<env>.yaml`, `deploy/viva.<component>.<env>.yaml`, and `docker-compose.viva.<env>.yml`.
 - Keep file paths predictable and reviewable: avoid unrelated renames, generated churn, and mixed concerns; when moving or renaming files, update all references in the same change.
 
+## Planning Principles
+
+Use one deliberate plan per task, aligned to the real goal, constraints, and available context.  
+Avoid broad fallback paths by default.
+
+- Define concrete success criteria and constraints before execution.
+- Keep the plan minimal and directly testable.
+- Handle known exceptions explicitly.
+- On failure, stop, inspect the cause, and adjust deliberately.
+- Do not switch strategies silently; change course only when evidence or user request requires it.
+- Prefer explicit error handling over speculative backup paths.
+
+For multi-step work, use numbered checks:
+
+1. [Step] -> [check]
+2. [Step] -> [check]
+3. [Step] -> [check]
+
 ## Plans And Inbox
 - `plans/` stores plan documents.
 - `inbox/` stores append-only planner/coder communication files.
