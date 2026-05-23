@@ -119,3 +119,6 @@ For multi-step work, use numbered checks:
 
 ## Message Readability
 - Emojify reports/messages where it improves readability, using relevant emojis only.
+
+## Implementation Language
+- Prefer Rust by default; use shell scripts only when unavoidable. For web or UI work, use SvelteKit/Svelte with TypeScript/JavaScript only when Rust is not practical.
