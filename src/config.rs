@@ -8,7 +8,7 @@ use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
 pub const DEFAULT_TOKEN_TTL: Duration = Duration::from_secs(15 * 60);
-pub const DEFAULT_REFRESH_SESSION_TTL: Duration = Duration::from_secs(7 * 24 * 60 * 60);
+pub const DEFAULT_REFRESH_SESSION_TTL: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 pub const DEFAULT_RUN_TTL: Duration = Duration::from_secs(60);
 pub const DEFAULT_SECRET_TTL: Duration = Duration::from_secs(120);
 
@@ -252,7 +252,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn file_config_defaults_normal_refresh_sessions_to_seven_days() {
+    fn file_config_defaults_normal_refresh_sessions_to_thirty_days() {
         let dir = tempfile::tempdir().expect("tempdir");
         let signing_key = dir.path().join("fort-jwt-signing.key");
         fs::write(&signing_key, "test-signing-key-that-is-long-enough").expect("write key");
@@ -270,7 +270,7 @@ mod tests {
         assert_eq!(config.refresh_session_ttl, DEFAULT_REFRESH_SESSION_TTL);
         assert_eq!(
             config.refresh_session_ttl,
-            Duration::from_secs(7 * 24 * 60 * 60)
+            Duration::from_secs(30 * 24 * 60 * 60)
         );
     }
 
