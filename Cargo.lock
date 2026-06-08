@@ -561,7 +561,7 @@ dependencies = [
 
 [[package]]
 name = "fort"
-version = "0.2.12"
+version = "0.2.13"
 dependencies = [
  "anyhow",
  "axum",

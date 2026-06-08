@@ -134,11 +134,11 @@ si fort -- --host https://fort.aureuma.ai doctor
 
 ## Deploy with Viva
 ```bash
-viva deploy --file deploy/service.yaml
-viva deploy --file deploy/service.public.yaml
+viva deploy --file deploy/viva.api-local.prod.yaml
+viva deploy --file deploy/viva.api.prod.yaml
 ```
 
-Public domain config is in `deploy/service.public.yaml`.
+Public domain config is in `deploy/viva.api.prod.yaml`.
 Both deploy manifests require Fort config to reference mounted file-backed secrets and storage paths.
 The runtime contract stays file-backed in containerized deploys:
 - `jwt_signing_key_file` must point to a mounted `0600` regular file
