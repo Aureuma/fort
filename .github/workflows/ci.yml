@@ -5,6 +5,9 @@ on:
     branches: ["master", "main"]
   pull_request:
 
+env:
+  CARGO_BUILD_JOBS: 2
+
 jobs:
   test:
     runs-on: ubuntu-latest
