@@ -8,7 +8,17 @@ use std::process::Command;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use blake2::{
+    Blake2bVar,
+    digest::{Update, VariableOutput},
+};
+use chrono::{Duration as ChronoDuration, Utc};
 use clap::{Args, Parser, Subcommand};
+use crypto_box::{
+    PublicKey as CryptoBoxPublicKey, SalsaBox, SecretKey as CryptoBoxSecretKey,
+    aead::{Aead, generic_array::GenericArray, rand_core::OsRng},
+};
 use reqwest::Method;
 use reqwest::blocking::Client as HttpClient;
 use serde_json::{Value, json};
@@ -41,6 +51,7 @@ enum FortCommand {
     #[command(name = "batch-get")]
     BatchGet(BatchGetArgs),
     Run(RunArgs),
+    Rotate(Box<RotateCommand>),
     Agent(AgentCommand),
 }
 
@@ -104,6 +115,75 @@ struct RunArgs {
     ttl: String,
     #[arg(last = true, required = true)]
     command: Vec<String>,
+}
+
+#[derive(Args)]
+struct RotateCommand {
+    #[command(subcommand)]
+    command: RotateSubcommand,
+}
+
+#[derive(Subcommand)]
+enum RotateSubcommand {
+    Npm(Box<NpmRotateArgs>),
+}
+
+#[derive(Args)]
+struct NpmRotateArgs {
+    #[arg(long)]
+    repo: String,
+    #[arg(long)]
+    env: String,
+    #[arg(long)]
+    token_key: String,
+    #[arg(long)]
+    management_token_key: Option<String>,
+    #[arg(long)]
+    password_key: String,
+    #[arg(long)]
+    otp_file: Option<String>,
+    #[arg(long)]
+    revoke_otp_file: Option<String>,
+    #[arg(long)]
+    name: String,
+    #[arg(long, default_value = "")]
+    description: String,
+    #[arg(long, default_value_t = 90)]
+    expires_days: i64,
+    #[arg(long = "package")]
+    packages: Vec<String>,
+    #[arg(long = "scope")]
+    scopes: Vec<String>,
+    #[arg(long = "org")]
+    orgs: Vec<String>,
+    #[arg(long = "cidr")]
+    cidr: Vec<String>,
+    #[arg(long, default_value = "read-write")]
+    packages_permission: String,
+    #[arg(long, default_value = "no-access")]
+    orgs_permission: String,
+    #[arg(long, default_value_t = false)]
+    all_packages: bool,
+    #[arg(long, default_value_t = false)]
+    bypass_2fa: bool,
+    #[arg(long, default_value_t = false)]
+    revoke_old: bool,
+    #[arg(long, default_value_t = false)]
+    dry_run: bool,
+    #[arg(long, default_value = "https://registry.npmjs.org")]
+    registry: String,
+    #[arg(long = "github-actions-repo")]
+    github_actions_repos: Vec<String>,
+    #[arg(long, default_value = "")]
+    github_secret_name: String,
+    #[arg(long)]
+    github_token_key: Option<String>,
+    #[arg(long)]
+    github_token_repo: Option<String>,
+    #[arg(long)]
+    github_token_env: Option<String>,
+    #[arg(long, default_value = "https://api.github.com")]
+    github_api_base: String,
 }
 
 #[derive(Args)]
@@ -338,6 +418,7 @@ impl Client {
             FortCommand::List(args) => self.cmd_list(args),
             FortCommand::BatchGet(args) => self.cmd_batch_get(args),
             FortCommand::Run(args) => self.cmd_run(args),
+            FortCommand::Rotate(command) => self.cmd_rotate(command.command),
             FortCommand::Agent(command) => self.cmd_agent(command.command),
         }
     }
@@ -775,6 +856,101 @@ impl Client {
         result
     }
 
+    fn cmd_rotate(&self, command: RotateSubcommand) -> Result<()> {
+        match command {
+            RotateSubcommand::Npm(args) => self.cmd_rotate_npm(*args),
+        }
+    }
+
+    fn cmd_rotate_npm(&self, args: NpmRotateArgs) -> Result<()> {
+        let spec = NpmTokenSpec::from_args(&args)?;
+        let github_sink = GitHubActionsSecretSink::from_args(&args)?;
+        let management_token_key = args
+            .management_token_key
+            .as_deref()
+            .unwrap_or(args.token_key.as_str());
+
+        if args.dry_run {
+            return self.print_npm_rotation_result(json!({
+                "provider": "npm",
+                "dry_run": true,
+                "repo": args.repo,
+                "env": args.env,
+                "token_key": args.token_key,
+                "management_token_key": management_token_key,
+                "registry": spec.registry.as_str(),
+                "would_create_token": spec.safe_summary(),
+                "would_update_fort": true,
+                "would_revoke_old": args.revoke_old,
+                "would_update_github_actions": github_sink.as_ref().map(GitHubActionsSecretSink::safe_summary),
+                "secret_values_loaded": false
+            }));
+        }
+
+        let old_token = self.get_secret_value(&args.repo, &args.env, &args.token_key)?;
+        let management_token = if management_token_key == args.token_key {
+            old_token.clone()
+        } else {
+            self.get_secret_value(&args.repo, &args.env, management_token_key)?
+        };
+        let password = self.get_secret_value(&args.repo, &args.env, &args.password_key)?;
+
+        let otp_file = args
+            .otp_file
+            .as_deref()
+            .ok_or_else(|| anyhow!("--otp-file is required for npm token creation"))?;
+        let otp = read_secret_file(otp_file).context("read npm OTP file")?;
+        let created = self.create_npm_token(&spec, &management_token, &password, &otp)?;
+        let new_token = created
+            .get("token")
+            .and_then(Value::as_str)
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| anyhow!("npm token create response missing token"))?
+            .to_string();
+
+        self.set_secret_value(&args.repo, &args.env, &args.token_key, &new_token)?;
+
+        let github_updates = if let Some(sink) = github_sink {
+            let token_repo = sink.token_repo.as_deref().unwrap_or(args.repo.as_str());
+            let token_env = sink.token_env.as_deref().unwrap_or(args.env.as_str());
+            let github_token = self.get_secret_value(token_repo, token_env, &sink.token_key)?;
+            self.update_github_actions_secrets(&sink, &github_token, &new_token)?
+        } else {
+            Vec::new()
+        };
+
+        let mut revoked_old = false;
+        if args.revoke_old {
+            let revoke_otp = if let Some(path) = args.revoke_otp_file.as_deref() {
+                read_secret_file(path).context("read npm revoke OTP file")?
+            } else {
+                otp
+            };
+            self.delete_npm_token(&spec.registry, &management_token, &old_token, &revoke_otp)?;
+            revoked_old = true;
+        }
+
+        let mut redacted_created = created;
+        if let Some(object) = redacted_created.as_object_mut() {
+            object.remove("token");
+            object.insert("token".to_string(), json!(redact_secret(&new_token)));
+        }
+
+        self.print_npm_rotation_result(json!({
+            "provider": "npm",
+            "dry_run": false,
+            "repo": args.repo,
+            "env": args.env,
+            "token_key": args.token_key,
+            "management_token_key": management_token_key,
+            "registry": spec.registry.as_str(),
+            "created": redacted_created,
+            "fort_updated": true,
+            "github_actions_updated": github_updates,
+            "old_token_revoked": revoked_old
+        }))
+    }
+
     fn cmd_agent(&self, command: AgentSubcommand) -> Result<()> {
         match command {
             AgentSubcommand::Create(args) => {
@@ -939,6 +1115,468 @@ impl Client {
         }
         Ok(())
     }
+
+    fn get_secret_value(&self, repo: &str, env: &str, key: &str) -> Result<String> {
+        let (status, response) = self.api_request(
+            Method::POST,
+            "/v1/secrets/get",
+            Some(json!({ "repo": repo, "env": env, "key": key })),
+            true,
+        )?;
+        ensure_status(status, 200, &response)?;
+        response["value"]
+            .as_str()
+            .map(str::to_string)
+            .filter(|value| !value.trim().is_empty())
+            .ok_or_else(|| anyhow!("fort secret {repo}/{env}/{key} is empty or missing"))
+    }
+
+    fn set_secret_value(&self, repo: &str, env: &str, key: &str, value: &str) -> Result<()> {
+        let (status, response) = self.api_request(
+            Method::POST,
+            "/v1/secrets/set",
+            Some(json!({
+                "repo": repo,
+                "env": env,
+                "key": key,
+                "value": value,
+            })),
+            true,
+        )?;
+        ensure_status(status, 200, &response)
+    }
+
+    fn create_npm_token(
+        &self,
+        spec: &NpmTokenSpec,
+        management_token: &str,
+        password: &str,
+        otp: &str,
+    ) -> Result<Value> {
+        let url = spec
+            .registry
+            .join("-/npm/v1/tokens")
+            .context("build npm token create url")?;
+        let response = self
+            .http
+            .post(url)
+            .bearer_auth(management_token.trim())
+            .header("npm-otp", otp.trim())
+            .header("npm-auth-type", "web")
+            .header("npm-command", "token")
+            .json(&spec.create_body(password))
+            .send()
+            .context("send npm token create request")?;
+        let status = response.status().as_u16();
+        let body = response.json::<Value>().unwrap_or_else(|_| json!({}));
+        if status != 201 {
+            bail!(
+                "npm token create failed (status={}): {}",
+                status,
+                npm_error(&body)
+            );
+        }
+        Ok(body)
+    }
+
+    fn delete_npm_token(
+        &self,
+        registry: &Url,
+        management_token: &str,
+        old_token: &str,
+        otp: &str,
+    ) -> Result<()> {
+        let encoded_token =
+            url::form_urlencoded::byte_serialize(old_token.trim().as_bytes()).collect::<String>();
+        let path = format!("-/npm/v1/tokens/token/{encoded_token}");
+        let url = registry.join(&path).context("build npm token delete url")?;
+        let response = self
+            .http
+            .delete(url)
+            .bearer_auth(management_token.trim())
+            .header("npm-otp", otp.trim())
+            .header("npm-auth-type", "web")
+            .header("npm-command", "token")
+            .send()
+            .context("send npm token delete request")?;
+        let status = response.status().as_u16();
+        if status == 204 {
+            return Ok(());
+        }
+        let body = response.json::<Value>().unwrap_or_else(|_| json!({}));
+        bail!(
+            "npm token delete failed (status={}): {}",
+            status,
+            npm_error(&body)
+        );
+    }
+
+    fn update_github_actions_secrets(
+        &self,
+        sink: &GitHubActionsSecretSink,
+        github_token: &str,
+        value: &str,
+    ) -> Result<Vec<Value>> {
+        let mut updates = Vec::with_capacity(sink.repos.len());
+        for repo in &sink.repos {
+            let key_url = sink
+                .api_base
+                .join(&format!(
+                    "repos/{}/{}/actions/secrets/public-key",
+                    encode_path_segment(&repo.owner),
+                    encode_path_segment(&repo.name)
+                ))
+                .context("build github actions public key url")?;
+            let key_response = self
+                .github_request(Method::GET, key_url, github_token, None)?
+                .json::<Value>()
+                .unwrap_or_else(|_| json!({}));
+            let key = key_response
+                .get("key")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .trim();
+            let key_id = key_response
+                .get("key_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .trim();
+            if key.is_empty() || key_id.is_empty() {
+                bail!("github actions public key response missing key/key_id");
+            }
+            let encrypted_value = encrypt_github_actions_secret_value(key, value)?;
+            let secret_url = sink
+                .api_base
+                .join(&format!(
+                    "repos/{}/{}/actions/secrets/{}",
+                    encode_path_segment(&repo.owner),
+                    encode_path_segment(&repo.name),
+                    encode_path_segment(&sink.secret_name)
+                ))
+                .context("build github actions secret url")?;
+            let status = self
+                .github_request(
+                    Method::PUT,
+                    secret_url,
+                    github_token,
+                    Some(json!({
+                        "encrypted_value": encrypted_value,
+                        "key_id": key_id
+                    })),
+                )?
+                .status()
+                .as_u16();
+            if !matches!(status, 201 | 204) {
+                bail!("github actions secret update failed with status {status}");
+            }
+            updates.push(json!({
+                "repo": repo.raw,
+                "secret": sink.secret_name,
+                "status": status
+            }));
+        }
+        Ok(updates)
+    }
+
+    fn github_request(
+        &self,
+        method: Method,
+        url: Url,
+        github_token: &str,
+        body: Option<Value>,
+    ) -> Result<reqwest::blocking::Response> {
+        let mut request = self
+            .http
+            .request(method, url)
+            .bearer_auth(github_token.trim())
+            .header("Accept", "application/vnd.github+json")
+            .header("X-GitHub-Api-Version", "2022-11-28")
+            .header("User-Agent", "fort");
+        if let Some(body) = body {
+            request = request.json(&body);
+        }
+        let response = request.send().context("send github request")?;
+        if response.status().is_success() {
+            return Ok(response);
+        }
+        let status = response.status().as_u16();
+        let body = response.json::<Value>().unwrap_or_else(|_| json!({}));
+        bail!(
+            "github request failed (status={}): {}",
+            status,
+            github_error(&body)
+        );
+    }
+
+    fn print_npm_rotation_result(&self, value: Value) -> Result<()> {
+        if self.json {
+            print_json(&value)
+        } else if value
+            .get("dry_run")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+        {
+            println!("npm rotation dry run ok");
+            println!(
+                "token_key={}",
+                value["token_key"].as_str().unwrap_or_default()
+            );
+            println!(
+                "management_token_key={}",
+                value["management_token_key"].as_str().unwrap_or_default()
+            );
+            println!(
+                "registry={}",
+                value["registry"].as_str().unwrap_or_default()
+            );
+            Ok(())
+        } else {
+            println!("npm token rotated");
+            println!(
+                "token_key={}",
+                value["token_key"].as_str().unwrap_or_default()
+            );
+            println!(
+                "new_token_key={}",
+                value["created"]["key"].as_str().unwrap_or_default()
+            );
+            println!(
+                "old_token_revoked={}",
+                value["old_token_revoked"].as_bool().unwrap_or(false)
+            );
+            Ok(())
+        }
+    }
+}
+
+#[derive(Debug)]
+struct NpmTokenSpec {
+    registry: Url,
+    name: String,
+    description: String,
+    expires_days: i64,
+    packages: Vec<String>,
+    scopes: Vec<String>,
+    orgs: Vec<String>,
+    cidr: Vec<String>,
+    packages_permission: String,
+    orgs_permission: String,
+    bypass_2fa: bool,
+}
+
+impl NpmTokenSpec {
+    fn from_args(args: &NpmRotateArgs) -> Result<Self> {
+        let registry = Url::parse(args.registry.trim())
+            .with_context(|| format!("invalid npm registry {}", args.registry.trim()))?;
+        if !matches!(registry.scheme(), "https" | "http") {
+            bail!("npm registry must be http or https");
+        }
+        let packages_permission = normalize_npm_permission(&args.packages_permission)?;
+        let orgs_permission = normalize_npm_permission(&args.orgs_permission)?;
+        if args.name.trim().is_empty() {
+            bail!("--name is required");
+        }
+        if args.expires_days < 1 {
+            bail!("--expires-days must be at least 1");
+        }
+        if packages_permission == "read-write" && args.expires_days > 90 {
+            bail!("npm read-write token expiration cannot exceed 90 days");
+        }
+        let packages = clean_repeated_values(&args.packages);
+        let scopes = clean_repeated_values(&args.scopes);
+        let orgs = clean_repeated_values(&args.orgs);
+        let cidr = clean_repeated_values(&args.cidr);
+        if args.all_packages && !packages.is_empty() {
+            bail!("use either --all-packages or explicit --package values, not both");
+        }
+        let packages = if args.all_packages {
+            vec!["*".to_string()]
+        } else {
+            packages
+        };
+        if packages.is_empty() && scopes.is_empty() && orgs.is_empty() {
+            bail!("npm rotation requires --package, --scope, --org, or explicit --all-packages");
+        }
+        if packages_permission == "no-access" && (!packages.is_empty() || !scopes.is_empty()) {
+            bail!("packages/scopes were provided but --packages-permission is no-access");
+        }
+        if orgs_permission == "no-access" && !orgs.is_empty() {
+            bail!("orgs were provided but --orgs-permission is no-access");
+        }
+
+        Ok(Self {
+            registry,
+            name: args.name.trim().to_string(),
+            description: args.description.trim().to_string(),
+            expires_days: args.expires_days,
+            packages,
+            scopes,
+            orgs,
+            cidr,
+            packages_permission,
+            orgs_permission,
+            bypass_2fa: args.bypass_2fa,
+        })
+    }
+
+    fn create_body(&self, password: &str) -> Value {
+        let expires = (Utc::now() + ChronoDuration::days(self.expires_days))
+            .format("%Y-%m-%d")
+            .to_string();
+        let mut body = json!({
+            "password": password,
+            "name": self.name,
+            "expires": expires,
+            "bypass_2fa": self.bypass_2fa,
+            "packages": self.packages,
+            "scopes": self.scopes,
+            "orgs": self.orgs,
+            "packages_and_scopes_permission": self.packages_permission,
+            "orgs_permission": self.orgs_permission
+        });
+        if !self.description.is_empty() {
+            body["token_description"] = json!(self.description);
+        }
+        if !self.cidr.is_empty() {
+            body["cidr"] = json!(self.cidr);
+        }
+        body
+    }
+
+    fn safe_summary(&self) -> Value {
+        json!({
+            "name": self.name,
+            "description": self.description,
+            "expires_days": self.expires_days,
+            "packages": self.packages,
+            "scopes": self.scopes,
+            "orgs": self.orgs,
+            "cidr": self.cidr,
+            "packages_permission": self.packages_permission,
+            "orgs_permission": self.orgs_permission,
+            "bypass_2fa": self.bypass_2fa
+        })
+    }
+}
+
+#[derive(Debug)]
+struct GitHubActionsSecretSink {
+    repos: Vec<GitHubRepoRef>,
+    secret_name: String,
+    token_key: String,
+    token_repo: Option<String>,
+    token_env: Option<String>,
+    api_base: Url,
+}
+
+impl GitHubActionsSecretSink {
+    fn from_args(args: &NpmRotateArgs) -> Result<Option<Self>> {
+        let repos = clean_repeated_values(&args.github_actions_repos)
+            .into_iter()
+            .map(|raw| GitHubRepoRef::parse(&raw))
+            .collect::<Result<Vec<_>>>()?;
+        if repos.is_empty() {
+            if args.github_token_key.is_some()
+                || !args.github_secret_name.trim().is_empty()
+                || args.github_token_repo.is_some()
+                || args.github_token_env.is_some()
+                || args.github_api_base.trim() != "https://api.github.com"
+            {
+                bail!(
+                    "--github-actions-repo is required when GitHub Actions secret options are set"
+                );
+            }
+            return Ok(None);
+        }
+        let token_key = args
+            .github_token_key
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| anyhow!("--github-token-key is required with --github-actions-repo"))?
+            .to_string();
+        let token_repo = args
+            .github_token_repo
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+        let token_env = args
+            .github_token_env
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .map(str::to_string);
+        if token_repo.is_some() ^ token_env.is_some() {
+            bail!("--github-token-repo and --github-token-env must be provided together");
+        }
+        let secret_name = args
+            .github_secret_name
+            .trim()
+            .to_string()
+            .if_empty_then(|| args.token_key.trim().to_string());
+        validate_github_secret_name(&secret_name)?;
+        let api_base = Url::parse(args.github_api_base.trim())
+            .with_context(|| format!("invalid GitHub API base {}", args.github_api_base.trim()))?;
+        if !matches!(api_base.scheme(), "https" | "http") {
+            bail!("GitHub API base must be http or https");
+        }
+        Ok(Some(Self {
+            repos,
+            secret_name,
+            token_key,
+            token_repo,
+            token_env,
+            api_base,
+        }))
+    }
+
+    fn safe_summary(&self) -> Value {
+        json!({
+            "repos": self.repos.iter().map(|repo| repo.raw.clone()).collect::<Vec<_>>(),
+            "secret_name": self.secret_name,
+            "token_key": self.token_key,
+            "token_repo": self.token_repo,
+            "token_env": self.token_env,
+            "api_base": self.api_base.as_str()
+        })
+    }
+}
+
+#[derive(Debug)]
+struct GitHubRepoRef {
+    raw: String,
+    owner: String,
+    name: String,
+}
+
+impl GitHubRepoRef {
+    fn parse(raw: &str) -> Result<Self> {
+        let raw = raw.trim();
+        let (owner, name) = raw
+            .split_once('/')
+            .ok_or_else(|| anyhow!("GitHub repo must use owner/name form"))?;
+        let owner = owner.trim();
+        let name = name.trim();
+        if owner.is_empty() || name.is_empty() || name.contains('/') {
+            bail!("GitHub repo must use owner/name form");
+        }
+        Ok(Self {
+            raw: format!("{owner}/{name}"),
+            owner: owner.to_string(),
+            name: name.to_string(),
+        })
+    }
+}
+
+trait EmptyStringExt {
+    fn if_empty_then(self, fallback: impl FnOnce() -> String) -> String;
+}
+
+impl EmptyStringExt for String {
+    fn if_empty_then(self, fallback: impl FnOnce() -> String) -> String {
+        if self.is_empty() { fallback() } else { self }
+    }
 }
 
 fn resolve_host(flag_host: Option<String>) -> Result<String> {
@@ -1094,6 +1732,123 @@ fn split_csv(raw: &str) -> Vec<String> {
     out
 }
 
+fn clean_repeated_values(raw: &[String]) -> Vec<String> {
+    let mut out = Vec::new();
+    for value in raw
+        .iter()
+        .flat_map(|value| value.split(','))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+    {
+        if out.iter().any(|existing| existing == value) {
+            continue;
+        }
+        out.push(value.to_string());
+    }
+    out
+}
+
+fn normalize_npm_permission(raw: &str) -> Result<String> {
+    let normalized = raw.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "read-only" | "read-write" | "no-access" => Ok(normalized),
+        _ => bail!("npm permission must be read-only, read-write, or no-access"),
+    }
+}
+
+fn redact_secret(secret: &str) -> String {
+    let secret = secret.trim();
+    if secret.is_empty() {
+        return "<empty>".to_string();
+    }
+    let chars = secret.chars().collect::<Vec<_>>();
+    if chars.len() <= 12 {
+        return format!("{}...", chars.iter().take(4).collect::<String>());
+    }
+    format!(
+        "{}...{}",
+        chars.iter().take(8).collect::<String>(),
+        chars
+            .iter()
+            .rev()
+            .take(4)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect::<String>()
+    )
+}
+
+fn npm_error(body: &Value) -> String {
+    body.get("error")
+        .or_else(|| body.get("message"))
+        .and_then(Value::as_str)
+        .unwrap_or("request failed")
+        .to_string()
+}
+
+fn github_error(body: &Value) -> String {
+    body.get("message")
+        .or_else(|| body.get("error"))
+        .and_then(Value::as_str)
+        .unwrap_or("request failed")
+        .to_string()
+}
+
+fn validate_github_secret_name(name: &str) -> Result<()> {
+    if name.trim().is_empty() {
+        bail!("GitHub secret name is required");
+    }
+    if !name
+        .chars()
+        .all(|ch| ch.is_ascii_uppercase() || ch.is_ascii_digit() || ch == '_')
+    {
+        bail!("GitHub secret name must contain only A-Z, 0-9, and _");
+    }
+    if name.starts_with("GITHUB_") {
+        bail!("GitHub secret name must not start with GITHUB_");
+    }
+    Ok(())
+}
+
+fn encode_path_segment(value: &str) -> String {
+    url::form_urlencoded::byte_serialize(value.as_bytes()).collect()
+}
+
+fn encrypt_github_actions_secret_value(public_key: &str, plaintext: &str) -> Result<String> {
+    let pub_bytes = BASE64
+        .decode(public_key.trim())
+        .context("decode github actions public key")?;
+    if pub_bytes.len() != 32 {
+        bail!(
+            "invalid github actions public key length: {}",
+            pub_bytes.len()
+        );
+    }
+    let recipient_pub = CryptoBoxPublicKey::from(
+        <[u8; 32]>::try_from(pub_bytes.as_slice())
+            .map_err(|_| anyhow!("invalid github actions public key length"))?,
+    );
+    let ephemeral_secret = CryptoBoxSecretKey::generate(&mut OsRng);
+    let ephemeral_pub_bytes = ephemeral_secret.public_key().as_bytes().to_owned();
+    let mut nonce_hash = Blake2bVar::new(24).context("init github actions secret nonce hash")?;
+    nonce_hash.update(&ephemeral_pub_bytes);
+    nonce_hash.update(recipient_pub.as_bytes());
+    let mut nonce_bytes = [0_u8; 24];
+    nonce_hash
+        .finalize_variable(&mut nonce_bytes)
+        .context("finalize github actions secret nonce hash")?;
+    let nonce = GenericArray::clone_from_slice(&nonce_bytes);
+    let cipher = SalsaBox::new(&recipient_pub, &ephemeral_secret);
+    let sealed = cipher
+        .encrypt(&nonce, plaintext.as_bytes())
+        .map_err(|err| anyhow!("encrypt github actions secret: {err}"))?;
+    let mut out = Vec::with_capacity(ephemeral_pub_bytes.len() + sealed.len());
+    out.extend_from_slice(&ephemeral_pub_bytes);
+    out.extend_from_slice(&sealed);
+    Ok(BASE64.encode(out))
+}
+
 fn parse_duration_seconds(raw: &str, fallback: Duration) -> Result<i64> {
     if raw.trim().is_empty() {
         return Ok(fallback.as_secs() as i64);
@@ -1225,4 +1980,93 @@ fn sanitized_child_env(current: Vec<(String, String)>) -> BTreeMap<String, Strin
                 && key != "FORT_TOKEN_FILE"
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn npm_token_spec_requires_explicit_access_surface() {
+        let args = npm_args();
+        let error = NpmTokenSpec::from_args(&args).expect_err("missing access surface");
+        assert!(
+            error
+                .to_string()
+                .contains("--package, --scope, --org, or explicit --all-packages")
+        );
+    }
+
+    #[test]
+    fn npm_token_spec_caps_read_write_expiry_to_ninety_days() {
+        let mut args = npm_args();
+        args.all_packages = true;
+        args.expires_days = 91;
+        let error = NpmTokenSpec::from_args(&args).expect_err("expiry should fail");
+        assert!(
+            error
+                .to_string()
+                .contains("read-write token expiration cannot exceed 90 days")
+        );
+    }
+
+    #[test]
+    fn npm_token_spec_builds_granular_create_body() {
+        let mut args = npm_args();
+        args.packages = vec!["svelta-blog".to_string(), "svelta-docs".to_string()];
+        args.scopes = vec!["@svelta".to_string()];
+        args.cidr = vec!["203.0.113.10/32".to_string()];
+        args.bypass_2fa = true;
+        let spec = NpmTokenSpec::from_args(&args).expect("spec");
+        let body = spec.create_body("secret-password");
+
+        assert_eq!(body["password"], "secret-password");
+        assert_eq!(body["name"], "fort-rotation-test");
+        assert_eq!(body["packages"][0], "svelta-blog");
+        assert_eq!(body["scopes"][0], "@svelta");
+        assert_eq!(body["cidr"][0], "203.0.113.10/32");
+        assert_eq!(body["packages_and_scopes_permission"], "read-write");
+        assert_eq!(body["bypass_2fa"], true);
+    }
+
+    #[test]
+    fn redacts_secret_without_disclosing_full_token() {
+        assert_eq!(
+            redact_secret("npm_abcdefghijklmnopqrstuvwxyz0123456789"),
+            "npm_abcd...6789"
+        );
+        assert_eq!(redact_secret("short"), "shor...");
+    }
+
+    fn npm_args() -> NpmRotateArgs {
+        NpmRotateArgs {
+            repo: "svelta-blog".to_string(),
+            env: "prod".to_string(),
+            token_key: "NPM_TOKEN".to_string(),
+            management_token_key: Some("NPM_MANAGEMENT_TOKEN".to_string()),
+            password_key: "NPM_PASSWORD".to_string(),
+            otp_file: Some("/tmp/npm-otp".to_string()),
+            revoke_otp_file: None,
+            name: "fort-rotation-test".to_string(),
+            description: "test token".to_string(),
+            expires_days: 90,
+            packages: Vec::new(),
+            scopes: Vec::new(),
+            orgs: Vec::new(),
+            cidr: Vec::new(),
+            packages_permission: "read-write".to_string(),
+            orgs_permission: "no-access".to_string(),
+            all_packages: false,
+            bypass_2fa: false,
+            revoke_old: false,
+            dry_run: false,
+            registry: "https://registry.npmjs.org".to_string(),
+            github_actions_repos: Vec::new(),
+            github_secret_name: String::new(),
+            github_token_key: None,
+            github_token_repo: None,
+            github_token_env: None,
+            github_api_base: "https://api.github.com".to_string(),
+        }
+    }
 }

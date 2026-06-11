@@ -87,6 +87,7 @@ fort set
 fort list
 fort batch-get
 fort run
+fort rotate npm
 fort agent create|get|list|set-status|rotate|remove
 fort agent policy get|set|add|remove|check
 ```
@@ -97,6 +98,46 @@ CLI host resolution order:
 3. `~/.si/fort/settings.toml` `[fort].host` (or `~/.si/settings.toml` `[fort].host`)
 
 `fort run` performs `open -> materialize -> close` session flow.
+
+### npm Token Rotation
+
+`fort rotate npm` rotates an npm access token stored in Fort-managed Safe material.
+The command reads the current publish token, npm management token, and npm password through Fort,
+creates a new npm granular token through the npm registry API, writes the new token back through
+Fort, and optionally revokes the old npm token after the Fort write succeeds.
+
+Example:
+
+```bash
+fort rotate npm \
+  --repo svelta-blog \
+  --env prod \
+  --token-key NPM_TOKEN \
+  --management-token-key NPM_MANAGEMENT_TOKEN \
+  --password-key NPM_PASSWORD \
+  --otp-file /run/user/1000/npm-otp \
+  --name svelta-blog-prod-publish-$(date +%Y%m%d) \
+  --package @aureuma/svelta-blog \
+  --packages-permission read-write \
+  --expires-days 90 \
+  --bypass-2fa \
+  --github-actions-repo Aureuma/svelta-blog \
+  --github-secret-name NPM_TOKEN \
+  --github-token-repo orbit \
+  --github-token-env prod \
+  --github-token-key GH_PAT_AUREUMA \
+  --revoke-old
+```
+
+Notes:
+- `--otp-file` must point to a `0600` file containing the current npm OTP.
+- `--management-token-key` should be a token capable of npm token management; it defaults to `--token-key` only for accounts where the stored token can create/revoke tokens.
+- Use explicit `--package` or `--scope` values for least privilege. `--all-packages` is accepted only when broad access is intentional.
+- Read-write npm tokens are capped at 90 days.
+- JSON output redacts token values; the full new token is written only through Fort.
+- `--github-actions-repo` updates a repository Actions secret with the new npm token after the Fort write succeeds. Fort fetches the repository public key, encrypts the new token with GitHub-compatible sealed-box encryption, and sends only the encrypted value to GitHub.
+- Old npm token revocation runs after every configured sink succeeds, including GitHub Actions secret updates.
+- `--dry-run` validates the requested npm token shape and configured sinks without reading secret values, contacting npm, updating Fort, or updating GitHub.
 
 CLI token sources:
 1. `--token-file`
