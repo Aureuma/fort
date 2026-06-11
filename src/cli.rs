@@ -2046,7 +2046,8 @@ mod tests {
 
     #[test]
     fn npm_token_spec_builds_passwordless_create_body() {
-        let args = npm_args();
+        let mut args = npm_args();
+        args.packages = vec!["svelta-blog".to_string()];
         let spec = NpmTokenSpec::from_args(&args).expect("spec");
         let body = spec.create_body(None);
 
