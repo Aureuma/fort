@@ -2034,6 +2034,69 @@ mod tests {
     }
 
     #[test]
+    fn npm_token_spec_rejects_invalid_permission() {
+        let mut args = npm_args();
+        args.packages = vec!["pkg".to_string()];
+        args.packages_permission = "read".to_string();
+        let error = NpmTokenSpec::from_args(&args).expect_err("invalid permission");
+        assert!(
+            error
+                .to_string()
+                .contains("npm permission must be read-only, read-write, or no-access")
+        );
+    }
+
+    #[test]
+    fn npm_token_spec_rejects_no_access_permission_with_packages_or_scopes() {
+        let mut args = npm_args();
+        args.packages_permission = "no-access".to_string();
+        args.packages = vec!["pkg".to_string()];
+        let error = NpmTokenSpec::from_args(&args).expect_err("no-access package should fail");
+        assert!(
+            error
+                .to_string()
+                .contains("packages/scopes were provided but --packages-permission is no-access")
+        );
+
+        let mut args = npm_args();
+        args.packages_permission = "no-access".to_string();
+        args.scopes = vec!["@org".to_string()];
+        let error = NpmTokenSpec::from_args(&args).expect_err("no-access scope should fail");
+        assert!(
+            error
+                .to_string()
+                .contains("packages/scopes were provided but --packages-permission is no-access")
+        );
+    }
+
+    #[test]
+    fn npm_token_spec_rejects_org_no_access_with_orgs() {
+        let mut args = npm_args();
+        args.orgs_permission = "no-access".to_string();
+        args.orgs = vec!["org".to_string()];
+        let error = NpmTokenSpec::from_args(&args).expect_err("no-access org should fail");
+        assert!(
+            error
+                .to_string()
+                .contains("orgs were provided but --orgs-permission is no-access")
+        );
+    }
+
+    #[test]
+    fn npm_token_spec_rejects_all_packages_with_explicit_packages() {
+        let mut args = npm_args();
+        args.all_packages = true;
+        args.packages = vec!["pkg".to_string()];
+        args.orgs = vec!["org".to_string()];
+        let error = NpmTokenSpec::from_args(&args).expect_err("all packages conflict");
+        assert!(
+            error
+                .to_string()
+                .contains("use either --all-packages or explicit --package values, not both")
+        );
+    }
+
+    #[test]
     fn npm_token_spec_builds_granular_create_body() {
         let mut args = npm_args();
         args.packages = vec!["svelta-blog".to_string(), "svelta-docs".to_string()];
@@ -2069,6 +2132,78 @@ mod tests {
             "npm_abcd...6789"
         );
         assert_eq!(redact_secret("short"), "shor...");
+    }
+
+    #[test]
+    fn github_secret_name_is_required() {
+        let error = validate_github_secret_name("").expect_err("secret name required");
+        assert!(error.to_string().contains("GitHub secret name is required"));
+    }
+
+    #[test]
+    fn github_secret_name_is_restricted() {
+        let error = validate_github_secret_name("npm-token").expect_err("bad charset");
+        assert!(
+            error
+                .to_string()
+                .contains("GitHub secret name must contain only A-Z, 0-9, and _")
+        );
+        let error = validate_github_secret_name("GITHUB_TOKEN").expect_err("github prefix");
+        assert!(
+            error
+                .to_string()
+                .contains("GitHub secret name must not start with GITHUB_")
+        );
+    }
+
+    #[test]
+    fn github_actions_args_require_token_key_for_repos() {
+        let mut args = npm_args();
+        args.packages = vec!["pkg".to_string()];
+        args.github_actions_repos = vec!["owner/repo".to_string()];
+        let error =
+            GitHubActionsSecretSink::from_args(&args).expect_err("missing github token key");
+        assert!(
+            error
+                .to_string()
+                .contains("--github-token-key is required with --github-actions-repo")
+        );
+    }
+
+    #[test]
+    fn github_actions_args_require_repo_and_env_together() {
+        let mut args = npm_args();
+        args.packages = vec!["pkg".to_string()];
+        args.github_actions_repos = vec!["owner/repo".to_string()];
+        args.github_token_key = Some("TOKEN_KEY".to_string());
+        args.github_token_repo = Some("safe".to_string());
+        let error = GitHubActionsSecretSink::from_args(&args).expect_err("bad repo/env pair");
+        assert!(
+            error
+                .to_string()
+                .contains("--github-token-repo and --github-token-env must be provided together")
+        );
+
+        let mut args = npm_args();
+        args.packages = vec!["pkg".to_string()];
+        args.github_actions_repos = vec!["owner/repo".to_string()];
+        args.github_token_key = Some("TOKEN_KEY".to_string());
+        args.github_token_env = Some("prod".to_string());
+        let error = GitHubActionsSecretSink::from_args(&args).expect_err("bad repo/env pair2");
+        assert!(
+            error
+                .to_string()
+                .contains("--github-token-repo and --github-token-env must be provided together")
+        );
+    }
+
+    #[test]
+    fn github_repo_ref_requires_owner_and_repo_form() {
+        assert!(GitHubRepoRef::parse("owner").is_err());
+        assert!(GitHubRepoRef::parse("owner/repo/extra").is_err());
+        let parsed = GitHubRepoRef::parse("owner/repo").expect("valid repo");
+        assert_eq!(parsed.owner, "owner");
+        assert_eq!(parsed.name, "repo");
     }
 
     fn npm_args() -> NpmRotateArgs {
