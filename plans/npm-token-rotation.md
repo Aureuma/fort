@@ -47,7 +47,7 @@ Completed:
 3. Added token redaction in JSON and text output.
 4. Added focused unit tests for npm token request construction and validation.
 5. Added an integration test using local Fort plus a mock npm registry for create/write/revoke flow.
-6. Bumped Fort version to `0.2.20`.
+6. Bumped Fort version to `0.2.22`.
 7. Verified `cargo fmt --all -- --check`, `cargo test --locked`, and `cargo clippy --locked --all-targets -- -D warnings`.
 8. Committed implementation as `feat: add npm token rotation command`.
 9. Rechecked Svelta token locations through Fort using the managed `gadolina` Codex profile runtime.
@@ -61,6 +61,10 @@ Completed:
 17. Confirmed `SV_NPM_GAT_AUREUMA` could list tokens via `GET /-/npm/v1/tokens` but does not appear to be a publisher/session credential for token creation, and it was revoked during validation.
 18. Confirmed `aureuma/prod` does not expose the required live token creation inputs `NPM_PASSWORD` or `NPM_OTP` through Fort.
 19. Added negative-path coverage for passwordless-capable providers that reject passwordless token creation.
+20. Re-ran managed-runtime checks (`si codex shell --profile gadolina --slot nova-actor`) and confirmed:
+   - `aureuma/prod` exposes `NPM_TOKEN`, `NODE_AUTH_TOKEN`, and `SV_NPM_GAT_AUREUMA`.
+   - `npm whoami` for each token returns `E401`.
+   - `orbit` and `viva` GitHub PAT candidates return `401 Bad credentials` from `GET /user`.
 
 Remaining:
 
