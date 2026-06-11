@@ -1,8 +1,8 @@
 # npm Token Rotation
 
-Date: 2026-06-10
+Date: 2026-06-11
 Repo: `fort`
-Branch: `feat/npm-token-rotation`
+Branch: `main` (fast-forwarded from dedicated feature work)
 
 ## Purpose
 
@@ -38,7 +38,7 @@ Future providers should follow the same pattern:
 
 ## Current Status
 
-Implemented locally on `feat/npm-token-rotation`.
+Implemented in `main`.
 
 Completed:
 
@@ -47,7 +47,7 @@ Completed:
 3. Added token redaction in JSON and text output.
 4. Added focused unit tests for npm token request construction and validation.
 5. Added an integration test using local Fort plus a mock npm registry for create/write/revoke flow.
-6. Bumped Fort version to `0.2.15`.
+6. Bumped Fort version to `0.2.20`.
 7. Verified `cargo fmt --all -- --check`, `cargo test --locked`, and `cargo clippy --locked --all-targets -- -D warnings`.
 8. Committed implementation as `feat: add npm token rotation command`.
 9. Rechecked Svelta token locations through Fort using the managed `gadolina` Codex profile runtime.
@@ -60,6 +60,7 @@ Completed:
 16. Confirmed through `si fort run` that npm rejects both `aureuma/prod:SV_NPM_GAT_AUREUMA` and `aureuma/dev:SV_NPM_GAT_AUREUMA` with `E401` on `npm whoami`.
 17. Confirmed `SV_NPM_GAT_AUREUMA` could list tokens via `GET /-/npm/v1/tokens` but does not appear to be a publisher/session credential for token creation, and it was revoked during validation.
 18. Confirmed `aureuma/prod` does not expose the required live token creation inputs `NPM_PASSWORD` or `NPM_OTP` through Fort.
+19. Added negative-path coverage for passwordless-capable providers that reject passwordless token creation.
 
 Remaining:
 
@@ -70,6 +71,12 @@ Remaining:
 3. Provide the current npm OTP in a local `0600` file at rotation time, or store an approved OTP source once Fort has a supported workflow for it.
 4. If GitHub Actions `secrets.NPM_TOKEN` remains the active publish surface, repair GitHub auth and use `--github-actions-repo` to update that repository secret after npm token creation.
 5. Perform live npm rotation only after the above inputs are available.
+
+Planned provider expansion:
+
+- GitHub Apps/PATs: rotate token-based auth used for CI and API operations with the same create/store/revoke sequencing.
+- Docker Hub/OCI tokens: rotate publisher tokens where rotation APIs are supported.
+- Cloud provider keys: apply the same sink-first pattern when provider API supports list/create/revoke with explicit scope controls.
 
 Verified dry-run shape for Svelta:
 
