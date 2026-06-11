@@ -102,7 +102,7 @@ CLI host resolution order:
 ### npm Token Rotation
 
 `fort rotate npm` rotates an npm access token stored in Fort-managed Safe material.
-The command reads the current publish token, npm management token, and npm password through Fort,
+The command reads the current publish token, npm management token, and optionally npm password through Fort,
 creates a new npm granular token through the npm registry API, writes the new token back through
 Fort, and optionally revokes the old npm token after the Fort write succeeds.
 
@@ -131,6 +131,7 @@ fort rotate npm \
 
 Notes:
 - `--otp-file` must point to a `0600` file containing the current npm OTP.
+- `--password-key` is optional; include it when the management token flow requires it. If omitted, Fort attempts passwordless token creation for providers that allow it.
 - `--management-token-key` should be a token capable of npm token management; it defaults to `--token-key` only for accounts where the stored token can create/revoke tokens.
 - Use explicit `--package` or `--scope` values for least privilege. `--all-packages` is accepted only when broad access is intentional.
 - Read-write npm tokens are capped at 90 days.

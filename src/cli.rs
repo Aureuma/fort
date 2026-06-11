@@ -139,7 +139,7 @@ struct NpmRotateArgs {
     #[arg(long)]
     management_token_key: Option<String>,
     #[arg(long)]
-    password_key: String,
+    password_key: Option<String>,
     #[arg(long)]
     otp_file: Option<String>,
     #[arg(long)]
@@ -893,14 +893,18 @@ impl Client {
         } else {
             self.get_secret_value(&args.repo, &args.env, management_token_key)?
         };
-        let password = self.get_secret_value(&args.repo, &args.env, &args.password_key)?;
+        let password = if let Some(password_key) = args.password_key.as_deref() {
+            Some(self.get_secret_value(&args.repo, &args.env, password_key)?)
+        } else {
+            None
+        };
 
         let otp_file = args
             .otp_file
             .as_deref()
             .ok_or_else(|| anyhow!("--otp-file is required for npm token creation"))?;
         let otp = read_secret_file(otp_file).context("read npm OTP file")?;
-        let created = self.create_npm_token(&spec, &management_token, &password, &otp)?;
+        let created = self.create_npm_token(&spec, &management_token, password.as_deref(), &otp)?;
         let new_token = created
             .get("token")
             .and_then(Value::as_str)
@@ -1150,7 +1154,7 @@ impl Client {
         &self,
         spec: &NpmTokenSpec,
         management_token: &str,
-        password: &str,
+        password: Option<&str>,
         otp: &str,
     ) -> Result<Value> {
         let url = spec
@@ -1170,6 +1174,15 @@ impl Client {
         let status = response.status().as_u16();
         let body = response.json::<Value>().unwrap_or_else(|_| json!({}));
         if status != 201 {
+            if password.is_none() && status == 400 {
+                let message = npm_error(&body);
+                if message.to_lowercase().contains("password") {
+                    bail!(
+                        "npm token create rejected passwordless mode (status=400): {}. Provide --password-key for this token-management credential.",
+                        message
+                    );
+                }
+            }
             bail!(
                 "npm token create failed (status={}): {}",
                 status,
@@ -1419,12 +1432,11 @@ impl NpmTokenSpec {
         })
     }
 
-    fn create_body(&self, password: &str) -> Value {
+    fn create_body(&self, password: Option<&str>) -> Value {
         let expires = (Utc::now() + ChronoDuration::days(self.expires_days))
             .format("%Y-%m-%d")
             .to_string();
         let mut body = json!({
-            "password": password,
             "name": self.name,
             "expires": expires,
             "bypass_2fa": self.bypass_2fa,
@@ -1434,6 +1446,9 @@ impl NpmTokenSpec {
             "packages_and_scopes_permission": self.packages_permission,
             "orgs_permission": self.orgs_permission
         });
+        if let Some(password) = password {
+            body["password"] = json!(password);
+        }
         if !self.description.is_empty() {
             body["token_description"] = json!(self.description);
         }
@@ -2018,7 +2033,7 @@ mod tests {
         args.cidr = vec!["203.0.113.10/32".to_string()];
         args.bypass_2fa = true;
         let spec = NpmTokenSpec::from_args(&args).expect("spec");
-        let body = spec.create_body("secret-password");
+        let body = spec.create_body(Some("secret-password"));
 
         assert_eq!(body["password"], "secret-password");
         assert_eq!(body["name"], "fort-rotation-test");
@@ -2027,6 +2042,15 @@ mod tests {
         assert_eq!(body["cidr"][0], "203.0.113.10/32");
         assert_eq!(body["packages_and_scopes_permission"], "read-write");
         assert_eq!(body["bypass_2fa"], true);
+    }
+
+    #[test]
+    fn npm_token_spec_builds_passwordless_create_body() {
+        let args = npm_args();
+        let spec = NpmTokenSpec::from_args(&args).expect("spec");
+        let body = spec.create_body(None);
+
+        assert!(body.get("password").is_none());
     }
 
     #[test]
@@ -2044,7 +2068,7 @@ mod tests {
             env: "prod".to_string(),
             token_key: "NPM_TOKEN".to_string(),
             management_token_key: Some("NPM_MANAGEMENT_TOKEN".to_string()),
-            password_key: "NPM_PASSWORD".to_string(),
+            password_key: Some("NPM_PASSWORD".to_string()),
             otp_file: Some("/tmp/npm-otp".to_string()),
             revoke_otp_file: None,
             name: "fort-rotation-test".to_string(),

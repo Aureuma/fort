@@ -58,14 +58,15 @@ Completed:
 14. Rechecked the user-specified Safe/Fort location structurally and confirmed the Svelta npm candidates are under `safe/aureuma`, exposed through Fort as `aureuma/dev` and `aureuma/prod`.
 15. Confirmed through `si fort run` that `aureuma/prod` has `NPM_TOKEN`, `NODE_AUTH_TOKEN`, and `SV_NPM_GAT_AUREUMA`, with `NPM_TOKEN` and `NODE_AUTH_TOKEN` equal.
 16. Confirmed through `si fort run` that npm rejects both `aureuma/prod:SV_NPM_GAT_AUREUMA` and `aureuma/dev:SV_NPM_GAT_AUREUMA` with `E401` on `npm whoami`.
-17. Confirmed `aureuma/prod` does not expose the required live token creation inputs `NPM_PASSWORD` or `NPM_OTP` through Fort.
+17. Confirmed `SV_NPM_GAT_AUREUMA` could list tokens via `GET /-/npm/v1/tokens` but does not appear to be a publisher/session credential for token creation, and it was revoked during validation.
+18. Confirmed `aureuma/prod` does not expose the required live token creation inputs `NPM_PASSWORD` or `NPM_OTP` through Fort.
 
 Remaining:
 
 1. Replace or repair the Fort-backed Svelta/Aureuma npm publish credential, because the current Fort-exposed candidates fail npm authentication.
 2. Store required npm rotation inputs through the approved Fort/Safe workflow:
    - a valid npm token-management bearer, typically a current npm session/traditional token accepted by the token-management API
-   - npm password or an equivalent npm-supported token creation credential
+   - npm password or an equivalent npm-supported token creation credential (now supported as optional in CLI, based on provider behavior)
 3. Provide the current npm OTP in a local `0600` file at rotation time, or store an approved OTP source once Fort has a supported workflow for it.
 4. If GitHub Actions `secrets.NPM_TOKEN` remains the active publish surface, repair GitHub auth and use `--github-actions-repo` to update that repository secret after npm token creation.
 5. Perform live npm rotation only after the above inputs are available.
@@ -96,7 +97,9 @@ Current blocker:
 Fort runtime auth works with `CODEX_HOME=/home/shawn/.si/codex/profiles/gadolina`. The Svelta-looking npm
 keys are currently in `aureuma/dev` and `aureuma/prod`, not in a `safe/svelta*` scope. The available
 Fort-exposed npm token candidates are present but fail npm authentication with `E401`, and `aureuma/prod`
-does not expose the `NPM_PASSWORD`/`NPM_OTP` inputs needed for live npm token creation. The Svelta repos
+does not expose the `NPM_PASSWORD`/`NPM_OTP` inputs needed for live npm token creation. `SV_NPM_GAT_AUREUMA` also
+supports token-management list/revoke operations but has already been revoked in-place.
+The Svelta repos
 reference `NPM_TOKEN` in GitHub Actions publish workflows. Local `gh` auth and the Fort-listed GitHub PAT
 keys checked during this task return GitHub `401 Bad credentials`, so GitHub Actions secret metadata and
 updates are also blocked. Checked keys:
