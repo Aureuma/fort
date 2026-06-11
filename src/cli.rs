@@ -887,14 +887,15 @@ impl Client {
             }));
         }
 
-        let old_token = self.get_secret_value(&args.repo, &args.env, &args.token_key)?;
+        let old_token =
+            self.get_secret_value_for_rotation(&args.repo, &args.env, &args.token_key)?;
         let management_token = if management_token_key == args.token_key {
             old_token.clone()
         } else {
-            self.get_secret_value(&args.repo, &args.env, management_token_key)?
+            self.get_secret_value_for_rotation(&args.repo, &args.env, management_token_key)?
         };
         let password = if let Some(password_key) = args.password_key.as_deref() {
-            Some(self.get_secret_value(&args.repo, &args.env, password_key)?)
+            Some(self.get_secret_value_for_rotation(&args.repo, &args.env, password_key)?)
         } else {
             None
         };
@@ -917,7 +918,8 @@ impl Client {
         let github_updates = if let Some(sink) = github_sink {
             let token_repo = sink.token_repo.as_deref().unwrap_or(args.repo.as_str());
             let token_env = sink.token_env.as_deref().unwrap_or(args.env.as_str());
-            let github_token = self.get_secret_value(token_repo, token_env, &sink.token_key)?;
+            let github_token =
+                self.get_secret_value_for_rotation(token_repo, token_env, &sink.token_key)?;
             self.update_github_actions_secrets(&sink, &github_token, &new_token)?
         } else {
             Vec::new()
@@ -1133,6 +1135,12 @@ impl Client {
             .map(str::to_string)
             .filter(|value| !value.trim().is_empty())
             .ok_or_else(|| anyhow!("fort secret {repo}/{env}/{key} is empty or missing"))
+    }
+
+    fn get_secret_value_for_rotation(&self, repo: &str, env: &str, key: &str) -> Result<String> {
+        self.get_secret_value(repo, env, key).with_context(|| {
+            format!("missing required secret for npm rotation: {repo}/{env}/{key}")
+        })
     }
 
     fn set_secret_value(&self, repo: &str, env: &str, key: &str, value: &str) -> Result<()> {
