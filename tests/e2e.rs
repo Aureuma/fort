@@ -898,6 +898,207 @@ fn fort_cli_rejects_password_required_npm_rotation_without_password_key() {
 }
 
 #[test]
+fn fort_cli_reports_missing_password_secret_for_npm_rotation() {
+    let temp = TempDir::new().expect("tempdir");
+    let state_dir = temp.path().join("state");
+    let safe_root = temp.path().join("safe");
+    let safe_repo = safe_root.join("safe");
+    fs::create_dir_all(&state_dir).expect("mkdir state");
+    fs::create_dir_all(&safe_repo).expect("mkdir safe");
+
+    let state_path = state_dir.join("state.json");
+    let keyring_path = state_dir.join("si-vault-keyring.json");
+    let signing_key_path = state_dir.join("jwt-signing.key");
+    let config_path = state_dir.join("fortd.toml");
+    let refresh_path = state_dir.join("npm.refresh");
+    let access_path = state_dir.join("npm.access");
+    let admin_token_path = state_dir.join("admin.token");
+    let otp_path = state_dir.join("npm.otp");
+
+    let admin_token = seed_state(&state_path, &keyring_path, &signing_key_path);
+    fs::write(&admin_token_path, admin_token.as_bytes()).expect("write admin token");
+    fs::write(&otp_path, b"123456\n").expect("write otp");
+    set_0600(&admin_token_path);
+    set_0600(&otp_path);
+
+    let addr = free_addr();
+    let fortd = std::env::var("CARGO_BIN_EXE_fortd").expect("fortd path");
+    let fort = std::env::var("CARGO_BIN_EXE_fort").expect("fort path");
+    let fort_agent = std::env::var("CARGO_BIN_EXE_fort-agent").expect("fort-agent path");
+    let host = format!("http://{addr}");
+    fs::write(
+        &config_path,
+        format!(
+            "addr = \"{addr}\"\nstate_path = \"{}\"\njwt_signing_key_file = \"{}\"\nsafe_root = \"{}\"\nvault_keyring_file = \"{}\"\ntoken_ttl = \"15m\"\nrefresh_session_ttl = \"30d\"\nrun_ttl = \"60s\"\nsecret_ttl = \"120s\"\n",
+            state_path.display(),
+            signing_key_path.display(),
+            safe_root.display(),
+            keyring_path.display(),
+        ),
+    )
+    .expect("write fortd config");
+
+    let mut child = Command::new(&fortd)
+        .args(["--config-file", config_path.to_str().expect("config path")])
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .expect("spawn fortd");
+    wait_for(Duration::from_secs(10), || {
+        Command::new(&fort)
+            .args([
+                "--host",
+                &host,
+                "--token-file",
+                admin_token_path.to_str().expect("admin token path"),
+                "doctor",
+            ])
+            .status()
+            .ok()
+            .is_some_and(|status| status.success())
+    });
+
+    run_ok(
+        &fort,
+        &[
+            "--host",
+            &host,
+            "--token-file",
+            admin_token_path.to_str().unwrap(),
+            "agent",
+            "create",
+            "--id",
+            "npm-rotator-password-secret-missing",
+            "--type",
+            "workload",
+        ],
+    );
+    run_ok(
+        &fort,
+        &[
+            "--host",
+            &host,
+            "--token-file",
+            admin_token_path.to_str().unwrap(),
+            "agent",
+            "policy",
+            "set",
+            "--id",
+            "npm-rotator-password-secret-missing",
+            "--bind",
+            "safe:dev:get,set",
+        ],
+    );
+    run_ok(
+        &fort,
+        &[
+            "--host",
+            &host,
+            "--token-file",
+            admin_token_path.to_str().unwrap(),
+            "auth",
+            "session",
+            "open",
+            "--agent",
+            "npm-rotator-password-secret-missing",
+            "--access-ttl",
+            "3m",
+            "--refresh-ttl",
+            "30m",
+            "--refresh-token-out",
+            refresh_path.to_str().unwrap(),
+        ],
+    );
+    set_0600(&refresh_path);
+    run_ok(
+        &fort_agent,
+        &[
+            "--once",
+            "--host",
+            &host,
+            "--refresh-token-file",
+            refresh_path.to_str().unwrap(),
+            "--token-path",
+            access_path.to_str().unwrap(),
+        ],
+    );
+    set_0600(&access_path);
+
+    for (key, value) in [
+        (
+            "NPM_PUBLISH_TOKEN",
+            "npm_oldtoken000000000000000000000000000000",
+        ),
+        (
+            "NPM_MANAGEMENT_TOKEN",
+            "npm_management00000000000000000000000000",
+        ),
+    ] {
+        run_ok(
+            &fort,
+            &[
+                "--host",
+                &host,
+                "--token-file",
+                access_path.to_str().unwrap(),
+                "set",
+                "--repo",
+                "safe",
+                "--env",
+                "dev",
+                "--key",
+                key,
+                "--value",
+                value,
+            ],
+        );
+    }
+
+    let output = Command::new(&fort)
+        .args([
+            "--host",
+            &host,
+            "--token-file",
+            access_path.to_str().unwrap(),
+            "rotate",
+            "npm",
+            "--repo",
+            "safe",
+            "--env",
+            "dev",
+            "--token-key",
+            "NPM_PUBLISH_TOKEN",
+            "--management-token-key",
+            "NPM_MANAGEMENT_TOKEN",
+            "--password-key",
+            "NPM_PASSWORD",
+            "--otp-file",
+            otp_path.to_str().unwrap(),
+            "--name",
+            "fort-e2e-password-missing",
+            "--package",
+            "@scope/test",
+        ])
+        .output()
+        .expect("run npm rotation");
+    assert!(
+        !output.status.success(),
+        "npm rotation succeeded unexpectedly: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("missing required secret for npm rotation: safe/dev/NPM_PASSWORD"),
+        "unexpected error output: {}",
+        stderr
+    );
+
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+#[test]
 fn fort_backend_fails_fast_when_safe_root_or_keyring_mounts_are_wrong() {
     let temp = TempDir::new().expect("tempdir");
     let safe_root = temp.path().join("safe");
