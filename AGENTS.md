@@ -8,9 +8,6 @@ Fort stays intentionally thin:
 - authorize by policy bindings (`repo/env/op`)
 - route secret operations to SI Vault-backed material in `safe`
 
-## Repository Hygiene
-- Keep every `tickets/` directory and all files beneath it ignored by Git. Do not add, force-add, or commit ticket files to version control.
-
 ## Hard Boundaries
 Fort must not:
 - persist secret key/value material in Fort state
@@ -36,12 +33,9 @@ Fort state is limited to:
 - SI Vault ciphertext files (`safe/<repo>/.env.<env>`) must be regular files with `0600` (or stricter).
 
 ## Secret Access Discipline
-- `si fort` is the canonical interface for secret and credential management across SI-owned repos and operator workflows; direct `si vault` usage exists only as a Fort implementation or maintenance detail.
-- For operator workflows, runtime checks, bootstrap verification, and any credential or secret access, use `si fort` as the entry point rather than bypassing Fort with raw `si vault` commands or ad-hoc secret files.
 - Fort may call SI Vault-backed code internally as its implementation detail, but agents working on the repo should not jump around Fort for real secret access.
 - Direct Vault usage is limited to explicit Fort maintenance, isolated tests, or code paths whose purpose is implementing the Fort-to-Vault data plane.
 - Keep `docs/GUIDING_PRINCIPLES.md` in mind for secret-related work, especially public HTTPS runtime access, file-backed tokens, scoped policy enforcement, and Fort remaining the auth boundary over SI Vault-backed `safe` data.
-- `safe` is the literal name of the separate repository that stores encrypted secret material; it is not a generic label or an arbitrary local folder.
 
 ## Provisioning and Bootstrap
 - There is no production seeding/bootstrap shortcut.
@@ -83,42 +77,3 @@ Treat the following as regressions:
 - The canonical hard-coded version source is the root `Cargo.toml` under `[package].version`.
 - Docs, release automation, packaging metadata, and examples must reference that version instead of introducing another independently maintained repo version.
 - Every commit that changes tracked content in this repo must bump the patch version there in the same commit.
-
-### File Names And Paths
-
-- Name new files with stable, descriptive kebab-case unless the repo already has a stricter local convention; keep Viva deploy surfaces predictable with `deploy/viva.<env>.yaml`, `deploy/viva.<component>.<env>.yaml`, and `docker-compose.viva.<env>.yml`.
-- Keep file paths predictable and reviewable: avoid unrelated renames, generated churn, and mixed concerns; when moving or renaming files, update all references in the same change.
-
-## Planning Principles
-
-Use one deliberate plan per task, aligned to the real goal, constraints, and available context.  
-Avoid broad fallback paths by default.
-
-- Define concrete success criteria and constraints before execution.
-- Keep the plan minimal and directly testable.
-- Handle known exceptions explicitly.
-- On failure, stop, inspect the cause, and adjust deliberately.
-- Do not switch strategies silently; change course only when evidence or user request requires it.
-- Prefer explicit error handling over speculative backup paths.
-
-For multi-step work, use numbered checks:
-
-1. [Step] -> [check]
-2. [Step] -> [check]
-3. [Step] -> [check]
-
-## Plans And Inbox
-- `plans/` stores plan documents.
-- `inbox/` stores append-only planner/coder communication files.
-- For each plan file under `plans/`, keep a matching `.jsonl` file under `inbox/` with a similar path/name.
-- Each message entry should include a `role` (`planner` or `coder`) and stay compact and complete.
-
-
-## Node Package Manager
-- For Node-based workspaces in this repository, the preferred package manager is `pnpm` (use `corepack pnpm ...` by default).
-
-## Message Readability
-- Emojify reports/messages where it improves readability, using relevant emojis only.
-
-## Implementation Language
-- Use Rust as much as possible, and write everything in Rust whenever practical. Avoid shell scripts unless absolutely necessary. For web-based work, or anything that requires a web interface, use SvelteKit/Svelte with TypeScript or JavaScript when it cannot be handled cleanly in Rust.
