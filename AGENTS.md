@@ -1,4 +1,5 @@
 # Fort Mission Contract
+This repository follows the global instructions in `/home/shawn/Development/AGENTS.md`; local entries below only add repository-specific overrides.
 ## Purpose
 Fort is the policy and authentication API boundary for SI Vault operations.
 Fort stays intentionally thin:
