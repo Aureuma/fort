@@ -62,6 +62,5 @@ Treat the following as regressions:
 - Fort-owned secret persistence
 - env-injected refresh/JWT signing secrets
 ## Version Source Of Truth
-- Keep one repo-wide version for `fort`.
 - The canonical hard-coded version source is the root `Cargo.toml` under `[package].version`.
 - Docs, release automation, packaging metadata, and examples must reference that version instead of introducing another independently maintained repo version.
