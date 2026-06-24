@@ -1,7 +1,5 @@
 # Fort Mission Contract
 
-- Follow the shared workspace rules in `/home/shawn/Development/AGENTS.md`.
-
 ## Purpose
 Fort is the policy and authentication API boundary for SI Vault operations.
 
