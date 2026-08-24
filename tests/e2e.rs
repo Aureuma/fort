@@ -186,7 +186,7 @@ fn fort_e2e_roundtrip_preserves_vault_ciphertext_contract() {
 
     let env_file = safe_repo.join(".env.dev");
     let raw = fs::read_to_string(&env_file).expect("read env file");
-    assert!(raw.contains("E2E_KEY=encrypted:si-vault:"));
+    assert!(raw.contains("E2E_KEY=encrypted:vault:"));
 
     let backend = fort::vaultbridge::Backend::new(fort::vaultbridge::Config {
         safe_root: safe_root.display().to_string(),

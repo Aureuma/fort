@@ -12,7 +12,13 @@ use thiserror::Error;
 
 use crate::config::ensure_strict_secret_file;
 
-pub const ENCRYPTED_PREFIX: &str = "encrypted:si-vault:";
+/// Prefix written for all new ciphertext.
+pub const ENCRYPTED_PREFIX: &str = "encrypted:vault:";
+/// Accepted on read during the migration window: ciphertext written before the
+/// vault tool was extracted from si. Dropped once `safe` is fully migrated.
+pub const LEGACY_SI_ENCRYPTED_PREFIX: &str = "encrypted:si-vault:";
+/// Accepted on read: the oldest bare prefix, still present in some files.
+pub const LEGACY_ENCRYPTED_PREFIX: &str = "encrypted:";
 
 #[derive(Debug, Error)]
 pub enum VaultError {
@@ -366,10 +372,20 @@ fn decrypt_value(raw: &str, candidates: &[String]) -> Result<String, VaultError>
     if raw.is_empty() {
         return Ok(String::new());
     }
-    if !raw.starts_with(ENCRYPTED_PREFIX) {
+    // Order matters: "encrypted:si-vault:" and "encrypted:vault:" both also start
+    // with the bare "encrypted:" prefix, so match most-specific first. strip_prefix
+    // (not trim_start_matches) so a payload that happens to repeat the prefix text
+    // is not silently eaten.
+    let encoded = if let Some(rest) = raw.strip_prefix(ENCRYPTED_PREFIX) {
+        rest.trim()
+    } else if let Some(rest) = raw.strip_prefix(LEGACY_SI_ENCRYPTED_PREFIX) {
+        rest.trim()
+    } else if let Some(rest) = raw.strip_prefix(LEGACY_ENCRYPTED_PREFIX) {
+        rest.trim()
+    } else {
+        // Not ciphertext in any known form: a genuinely plaintext value.
         return Ok(raw.to_string());
-    }
-    let encoded = raw.trim_start_matches(ENCRYPTED_PREFIX).trim();
+    };
     if encoded.is_empty() {
         return Ok(String::new());
     }
@@ -381,4 +397,92 @@ fn decrypt_value(raw: &str, candidates: &[String]) -> Result<String, VaultError>
         }
     }
     Err(VaultError::Invalid)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn keypair() -> (String, String) {
+        let (secret, public) = ecies::utils::generate_keypair();
+        (hex::encode(public.serialize_compressed()), hex::encode(secret.serialize()))
+    }
+
+    #[test]
+    fn encrypt_writes_the_current_prefix() {
+        let (public, private) = keypair();
+        let cipher = encrypt_value("hello", &public).expect("encrypt");
+        assert!(cipher.starts_with(ENCRYPTED_PREFIX), "{cipher}");
+        assert!(!cipher.starts_with(LEGACY_SI_ENCRYPTED_PREFIX));
+        assert_eq!(decrypt_value(&cipher, &[private]).expect("decrypt"), "hello");
+    }
+
+    /// The migration guarantee: one payload, relabelled under any accepted prefix,
+    /// must decrypt identically. Without this, migrating `safe` before deploying a
+    /// dual-read fortd would make production serve ciphertext strings as secrets.
+    #[test]
+    fn decrypt_accepts_current_and_both_legacy_prefixes() {
+        let (public, private) = keypair();
+        let cipher = encrypt_value("payload", &public).expect("encrypt");
+        let payload = cipher.strip_prefix(ENCRYPTED_PREFIX).expect("prefix");
+        let keys = [private];
+        for prefix in [ENCRYPTED_PREFIX, LEGACY_SI_ENCRYPTED_PREFIX, LEGACY_ENCRYPTED_PREFIX] {
+            let relabelled = format!("{prefix}{payload}");
+            assert_eq!(
+                decrypt_value(&relabelled, &keys).expect("decrypt"),
+                "payload",
+                "prefix {prefix}"
+            );
+        }
+    }
+
+    /// A value that looks like ciphertext but cannot be decoded must ERROR, not be
+    /// returned verbatim as a secret value. This is the silent-corruption guard.
+    #[test]
+    fn undecodable_ciphertext_errors_instead_of_falling_through_as_plaintext() {
+        let (_public, private) = keypair();
+        let keys = [private];
+        for bad in [
+            "encrypted:vault:!!!not-base64!!!",
+            "encrypted:si-vault:!!!not-base64!!!",
+            "encrypted:!!!not-base64!!!",
+        ] {
+            assert!(decrypt_value(bad, &keys).is_err(), "{bad} should not fall through");
+        }
+    }
+
+    #[test]
+    fn genuinely_plaintext_values_pass_through() {
+        let (_public, private) = keypair();
+        let keys = [private];
+        assert_eq!(decrypt_value("plain-value", &keys).expect("plain"), "plain-value");
+        assert_eq!(decrypt_value("", &keys).expect("empty"), "");
+    }
+
+    /// fort stores an empty plaintext as the bare prefix with no payload; both the
+    /// current and legacy spellings of that form must decrypt back to empty.
+    #[test]
+    fn empty_payload_forms_decrypt_to_empty() {
+        let (public, private) = keypair();
+        assert_eq!(encrypt_value("", &public).expect("encrypt"), ENCRYPTED_PREFIX);
+        let keys = [private];
+        for form in [ENCRYPTED_PREFIX, LEGACY_SI_ENCRYPTED_PREFIX] {
+            assert_eq!(decrypt_value(form, &keys).expect("decrypt"), "", "{form}");
+        }
+    }
+
+    /// A file mid-migration holds both spellings at once; every value must resolve.
+    #[test]
+    fn mixed_prefix_values_all_resolve() {
+        let (public, private) = keypair();
+        let a = encrypt_value("alpha", &public).expect("encrypt");
+        let b = encrypt_value("beta", &public).expect("encrypt");
+        let b_legacy = format!(
+            "{LEGACY_SI_ENCRYPTED_PREFIX}{}",
+            b.strip_prefix(ENCRYPTED_PREFIX).expect("prefix")
+        );
+        let keys = [private];
+        assert_eq!(decrypt_value(&a, &keys).expect("a"), "alpha");
+        assert_eq!(decrypt_value(&b_legacy, &keys).expect("b"), "beta");
+    }
 }
