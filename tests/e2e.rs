@@ -18,7 +18,7 @@ fn fort_e2e_roundtrip_preserves_vault_ciphertext_contract() {
     fs::create_dir_all(&safe_repo).expect("mkdir safe");
 
     let state_path = state_dir.join("state.json");
-    let keyring_path = state_dir.join("si-vault-keyring.json");
+    let keyring_path = state_dir.join("vault-keyring.json");
     let signing_key_path = state_dir.join("jwt-signing.key");
     let config_path = state_dir.join("fortd.toml");
     let refresh_path = state_dir.join("e2e.refresh");
@@ -213,7 +213,7 @@ fn fort_cli_rotates_npm_token_through_mock_registry() {
     fs::create_dir_all(&safe_repo).expect("mkdir safe");
 
     let state_path = state_dir.join("state.json");
-    let keyring_path = state_dir.join("si-vault-keyring.json");
+    let keyring_path = state_dir.join("vault-keyring.json");
     let signing_key_path = state_dir.join("jwt-signing.key");
     let config_path = state_dir.join("fortd.toml");
     let refresh_path = state_dir.join("npm.refresh");
@@ -452,7 +452,7 @@ fn fort_cli_rotates_passwordless_npm_token_through_mock_registry() {
     fs::create_dir_all(&safe_repo).expect("mkdir safe");
 
     let state_path = state_dir.join("state.json");
-    let keyring_path = state_dir.join("si-vault-keyring.json");
+    let keyring_path = state_dir.join("vault-keyring.json");
     let signing_key_path = state_dir.join("jwt-signing.key");
     let config_path = state_dir.join("fortd.toml");
     let refresh_path = state_dir.join("npm.refresh");
@@ -676,7 +676,7 @@ fn fort_cli_rejects_password_required_npm_rotation_without_password_key() {
     fs::create_dir_all(&safe_repo).expect("mkdir safe");
 
     let state_path = state_dir.join("state.json");
-    let keyring_path = state_dir.join("si-vault-keyring.json");
+    let keyring_path = state_dir.join("vault-keyring.json");
     let signing_key_path = state_dir.join("jwt-signing.key");
     let config_path = state_dir.join("fortd.toml");
     let refresh_path = state_dir.join("npm.refresh");
@@ -907,7 +907,7 @@ fn fort_cli_reports_missing_password_secret_for_npm_rotation() {
     fs::create_dir_all(&safe_repo).expect("mkdir safe");
 
     let state_path = state_dir.join("state.json");
-    let keyring_path = state_dir.join("si-vault-keyring.json");
+    let keyring_path = state_dir.join("vault-keyring.json");
     let signing_key_path = state_dir.join("jwt-signing.key");
     let config_path = state_dir.join("fortd.toml");
     let refresh_path = state_dir.join("npm.refresh");
@@ -1102,7 +1102,7 @@ fn fort_cli_reports_missing_password_secret_for_npm_rotation() {
 fn fort_backend_fails_fast_when_safe_root_or_keyring_mounts_are_wrong() {
     let temp = TempDir::new().expect("tempdir");
     let safe_root = temp.path().join("safe");
-    let keyring_path = temp.path().join("si-vault-keyring.json");
+    let keyring_path = temp.path().join("vault-keyring.json");
 
     let missing_safe = fort::vaultbridge::Backend::new(fort::vaultbridge::Config {
         safe_root: safe_root.display().to_string(),

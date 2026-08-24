@@ -208,7 +208,7 @@ pub fn default_vault_keyring_path() -> String {
     if home.trim().is_empty() {
         String::new()
     } else {
-        format!("{}/.si/vault/si-vault-keyring.json", home.trim())
+        format!("{}/.vault/keyring.json", home.trim())
     }
 }
 

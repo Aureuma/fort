@@ -12,7 +12,7 @@ SAFE_DIR="$(mktemp -d "${ARTIFACT_ROOT}/safe.XXXXXX")"
 trap 'docker rm -f fort-smoke >/dev/null 2>&1 || true; rm -rf "$STATE_DIR" "$SAFE_DIR"' EXIT
 mkdir -p "$SAFE_DIR/safe"
 ADMIN_TOKEN_PATH="$STATE_DIR/admin.token"
-ADMIN_TOKEN="$(STATE_PATH="$STATE_DIR/state.json" KEYRING_PATH="$STATE_DIR/si-vault-keyring.json" SIGNING_KEY_PATH="$STATE_DIR/jwt-signing.key" cargo run --quiet --bin fort-seed)"
+ADMIN_TOKEN="$(STATE_PATH="$STATE_DIR/state.json" KEYRING_PATH="$STATE_DIR/vault-keyring.json" SIGNING_KEY_PATH="$STATE_DIR/jwt-signing.key" cargo run --quiet --bin fort-seed)"
 printf '%s' "$ADMIN_TOKEN" > "$ADMIN_TOKEN_PATH"
 chmod 600 "$ADMIN_TOKEN_PATH"
 docker run -d \
