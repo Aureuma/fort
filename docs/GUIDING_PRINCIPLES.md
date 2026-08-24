@@ -1,9 +1,9 @@
 # Fort Guiding Principles
 
 ## Mission
-Fort is the policy/authentication boundary for SI Vault secret operations.
+Fort is the policy/authentication boundary for Vault secret operations.
 
-Fort is not a secret database. It must remain a thin API wrapper over SI Vault-backed `safe` data.
+Fort is not a secret database. It must remain a thin API wrapper over Vault-backed `safe` data.
 
 ## Core Invariants
 - Fort never persists secret plaintext key/value material.
@@ -21,9 +21,9 @@ Fort is not a secret database. It must remain a thin API wrapper over SI Vault-b
 ## Secret Handling Model
 - Refresh tokens and signing keys are file-backed secrets.
 - Required file mode is `0600` (or stricter).
-- SI Vault ciphertext files (`safe/<repo>/.env.<env>`) are required to be regular files with `0600` (or stricter).
-- SI Vault keyring entries must converge on one canonical keypair across all `repo/env` scopes.
-- SI Vault keyring material is file-backed JSON state (default `~/.si/vault/si-vault-keyring.json`), not OS keychain storage.
+- Vault ciphertext files (`safe/<repo>/.env.<env>`) are required to be regular files with `0600` (or stricter).
+- Vault keyring entries must converge on one canonical keypair across all `repo/env` scopes.
+- Vault keyring material is file-backed JSON state (default `~/.si/vault/vault-keyring.json`), not OS keychain storage.
 - Refresh tokens are not passed via environment variables.
 - Secret scope reads fail fast when `.env.<env>` or keyring scope material is missing.
 
@@ -32,26 +32,26 @@ Fort is not a secret database. It must remain a thin API wrapper over SI Vault-b
 - Added/kept integration coverage for:
   - Fort container smoke flow
   - SI↔Fort↔Vault end-to-end flow
-  - manual SI Vault decrypt parity checks
+  - manual Vault decrypt parity checks
 
 ## Non-Goals
 - Fort-owned secret persistence
 - alternate auth backdoors
-- shadow vault formats or private secret stores outside SI Vault
+- shadow vault formats or private secret stores outside Vault
 
 ## Unified Contract
 
 ### Scope Boundaries
-- SI Vault owns local `.env` encryption/decryption format and key material lifecycle.
+- Vault owns local `.env` encryption/decryption format and key material lifecycle.
 - Fort owns remote authentication/authorization and policy enforcement.
 
 ### Secret Data Plane
 - Source of truth for secrets: `safe/<repo>/.env.<env>`.
-- Ciphertext format: `encrypted:si-vault:...` (legacy `encrypted:` accepted for compatibility).
-- Fort `get/set/list/batch-get/run` resolves directly against SI Vault-backed `safe` files.
+- Ciphertext format: `encrypted:vault:...` only. Legacy labels are rejected, not silently read; the `vault` tool's `migrate` relabels them.
+- Fort `get/set/list/batch-get/run` resolves directly against Vault-backed `safe` files.
 
 ### Key Material Model
-- SI Vault key material registry: `~/.si/vault/si-vault-keyring.json` (or `SI_VAULT_KEYRING_FILE`).
+- Vault key material registry: `~/.vault/keyring.json` (or `FORT_VAULT_KEYRING_FILE`); production reads `/var/lib/fort/vault-keyring.json`.
 - This keyring is file-backed JSON state, not OS keychain storage.
 - One canonical keypair is enforced across all `repo/env` keyring scopes.
 - `backup_private_keys` sprawl is disallowed.
@@ -73,8 +73,8 @@ Fort is not a secret database. It must remain a thin API wrapper over SI Vault-b
 
 ### File/Permission Invariants
 - `safe/<repo>/.env.<env>`: regular file, `0600` or stricter.
-- `~/.si/vault/si-vault-keyring.json`: `0600`.
-- `~/.si/vault/keys/age.key` (if file backend): `0600`.
+- `~/.si/vault/vault-keyring.json`: `0600`.
+- `~/.vault/keys/age.key` (if file backend): `0600`.
 - Fort refresh token and signing key files: `0600`.
 
 ### Deployment Invariants
@@ -88,4 +88,4 @@ Fort is not a secret database. It must remain a thin API wrapper over SI Vault-b
 - auth bypass or hidden bootstrap path
 - Fort-owned secret persistence
 - env-injected refresh/JWT signing secrets
-- SI Vault keypair sprawl across scopes
+- Vault keypair sprawl across scopes

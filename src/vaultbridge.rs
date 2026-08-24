@@ -378,10 +378,13 @@ fn decrypt_value(raw: &str, candidates: &[String]) -> Result<String, VaultError>
     // is not silently eaten.
     let encoded = if let Some(rest) = raw.strip_prefix(ENCRYPTED_PREFIX) {
         rest.trim()
-    } else if let Some(rest) = raw.strip_prefix(LEGACY_SI_ENCRYPTED_PREFIX) {
-        rest.trim()
-    } else if let Some(rest) = raw.strip_prefix(LEGACY_ENCRYPTED_PREFIX) {
-        rest.trim()
+    } else if raw.starts_with(LEGACY_SI_ENCRYPTED_PREFIX)
+        || raw.starts_with(LEGACY_ENCRYPTED_PREFIX)
+    {
+        // safe is fully migrated, so a legacy label here means an un-migrated file
+        // reached the serving path. Fail rather than serve it: the alternative is
+        // reading data the operator believes no longer exists.
+        return Err(VaultError::Invalid);
     } else {
         // Not ciphertext in any known form: a genuinely plaintext value.
         return Ok(raw.to_string());
@@ -417,21 +420,19 @@ mod tests {
         assert_eq!(decrypt_value(&cipher, &[private]).expect("decrypt"), "hello");
     }
 
-    /// The migration guarantee: one payload, relabelled under any accepted prefix,
-    /// must decrypt identically. Without this, migrating `safe` before deploying a
-    /// dual-read fortd would make production serve ciphertext strings as secrets.
+    /// Steady state: only the current label is served. A legacy label means an
+    /// un-migrated file reached the serving path, which is an error, not a fallback.
     #[test]
-    fn decrypt_accepts_current_and_both_legacy_prefixes() {
+    fn decrypt_serves_current_label_and_rejects_legacy_ones() {
         let (public, private) = keypair();
         let cipher = encrypt_value("payload", &public).expect("encrypt");
         let payload = cipher.strip_prefix(ENCRYPTED_PREFIX).expect("prefix");
         let keys = [private];
-        for prefix in [ENCRYPTED_PREFIX, LEGACY_SI_ENCRYPTED_PREFIX, LEGACY_ENCRYPTED_PREFIX] {
-            let relabelled = format!("{prefix}{payload}");
-            assert_eq!(
-                decrypt_value(&relabelled, &keys).expect("decrypt"),
-                "payload",
-                "prefix {prefix}"
+        assert_eq!(decrypt_value(&cipher, &keys).expect("current"), "payload");
+        for prefix in [LEGACY_SI_ENCRYPTED_PREFIX, LEGACY_ENCRYPTED_PREFIX] {
+            assert!(
+                decrypt_value(&format!("{prefix}{payload}"), &keys).is_err(),
+                "prefix {prefix} must be rejected"
             );
         }
     }
@@ -466,14 +467,12 @@ mod tests {
         let (public, private) = keypair();
         assert_eq!(encrypt_value("", &public).expect("encrypt"), ENCRYPTED_PREFIX);
         let keys = [private];
-        for form in [ENCRYPTED_PREFIX, LEGACY_SI_ENCRYPTED_PREFIX] {
-            assert_eq!(decrypt_value(form, &keys).expect("decrypt"), "", "{form}");
-        }
+        assert_eq!(decrypt_value(ENCRYPTED_PREFIX, &keys).expect("decrypt"), "");
     }
 
     /// A file mid-migration holds both spellings at once; every value must resolve.
     #[test]
-    fn mixed_prefix_values_all_resolve() {
+    fn mixed_prefix_file_serves_current_and_errors_on_legacy() {
         let (public, private) = keypair();
         let a = encrypt_value("alpha", &public).expect("encrypt");
         let b = encrypt_value("beta", &public).expect("encrypt");
@@ -483,6 +482,6 @@ mod tests {
         );
         let keys = [private];
         assert_eq!(decrypt_value(&a, &keys).expect("a"), "alpha");
-        assert_eq!(decrypt_value(&b_legacy, &keys).expect("b"), "beta");
+        assert!(decrypt_value(&b_legacy, &keys).is_err(), "legacy half must error");
     }
 }

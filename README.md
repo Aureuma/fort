@@ -1,6 +1,6 @@
 # fort
 
-`fort` is the SI policy/authentication API for SI Vault operations.
+`fort` is the SI policy/authentication API for Vault operations.
 
 See also:
 - `docs/GUIDING_PRINCIPLES.md`
@@ -16,19 +16,19 @@ Fort is intentionally thin.
 Fort does:
 - bearer-token authentication
 - policy authorization at `repo/env/op`
-- secret operation routing to SI Vault-backed data in `safe` (`.env.<env>` files)
+- secret operation routing to Vault-backed data in `safe` (`.env.<env>` files)
 
 Fort does not:
 - store secret key/value material in Fort state
 - expose bootstrap/admin bypass keys
 
 ## Guiding Principles
-- Fort is an authz/authn wrapper over SI Vault, not a second vault.
-- All secret reads/writes resolve against SI Vault-backed `safe` `.env` material.
+- Fort is an authz/authn wrapper over Vault, not a second vault.
+- All secret reads/writes resolve against Vault-backed `safe` `.env` material.
 - Workloads authenticate with short-lived access tokens and rotating refresh sessions.
 - Refresh and signing secrets are file-backed and strict-permissioned (`0600`), never env-injected secret values.
-- SI Vault ciphertext files (`safe/<repo>/.env.<env>`) must be regular files with `0600` (or stricter).
-- SI Vault keyring material is file-backed JSON state (`~/.si/vault/si-vault-keyring.json` by default), not OS keychain storage.
+- Vault ciphertext files (`safe/<repo>/.env.<env>`) must be regular files with `0600` (or stricter).
+- Vault keyring material is file-backed JSON state (`~/.si/vault/vault-keyring.json` by default), not OS keychain storage.
 - Provisioning is explicit and authenticated; there is no hidden bootstrap bypass path.
 
 ## Auth & Session Security
@@ -65,7 +65,7 @@ addr = "127.0.0.1:8088"
 state_path = "$PWD/.artifacts/local/fort-state.json"
 jwt_signing_key_file = "$PWD/.artifacts/local/fort-jwt-signing.key"
 safe_root = "/home/shawn/Development/safe"
-vault_keyring_file = "$HOME/.si/vault/si-vault-keyring.json"
+vault_keyring_file = "$HOME/.si/vault/vault-keyring.json"
 token_ttl = "15m"
 refresh_session_ttl = "30d"
 run_ttl = "60s"
@@ -187,14 +187,14 @@ The runtime contract stays file-backed in containerized deploys:
 - `vault_keyring_file` must point to a mounted `0600` regular file
 - `safe_root` must point to the mounted `safe` directory
 
-`fortd` now fails at startup when the mounted safe root or SI Vault keyring path is missing or invalid, instead of deferring that failure until first secret access.
+`fortd` now fails at startup when the mounted safe root or Vault keyring path is missing or invalid, instead of deferring that failure until first secret access.
 
 ## Test
 ```bash
 cargo test
 cargo test fort_e2e_roundtrip_preserves_vault_ciphertext_contract -- --nocapture
 ./scripts/smoke-container.sh
-./scripts/e2e-si-vault.sh
+./scripts/e2e-vault.sh
 ```
 
 Integration coverage includes:
