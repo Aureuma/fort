@@ -12,13 +12,11 @@ use thiserror::Error;
 
 use crate::config::ensure_strict_secret_file;
 
-/// Prefix written for all new ciphertext.
+/// The one ciphertext label fort reads and writes.
 pub const ENCRYPTED_PREFIX: &str = "encrypted:vault:";
-/// Accepted on read during the migration window: ciphertext written before the
-/// vault tool was extracted from si. Dropped once `safe` is fully migrated.
-pub const LEGACY_SI_ENCRYPTED_PREFIX: &str = "encrypted:si-vault:";
-/// Accepted on read: the oldest bare prefix, still present in some files.
-pub const LEGACY_ENCRYPTED_PREFIX: &str = "encrypted:";
+/// Generic ciphertext sentinel: anything starting with this that is not the
+/// current label is refused -- never decrypted, never served as plaintext.
+const ENCRYPTED_SENTINEL: &str = "encrypted:";
 
 #[derive(Debug, Error)]
 pub enum VaultError {
@@ -372,21 +370,17 @@ fn decrypt_value(raw: &str, candidates: &[String]) -> Result<String, VaultError>
     if raw.is_empty() {
         return Ok(String::new());
     }
-    // Order matters: "encrypted:si-vault:" and "encrypted:vault:" both also start
-    // with the bare "encrypted:" prefix, so match most-specific first. strip_prefix
-    // (not trim_start_matches) so a payload that happens to repeat the prefix text
-    // is not silently eaten.
+    // strip_prefix (not trim_start_matches) so a payload that happens to repeat the
+    // prefix text is not silently eaten.
     let encoded = if let Some(rest) = raw.strip_prefix(ENCRYPTED_PREFIX) {
         rest.trim()
-    } else if raw.starts_with(LEGACY_SI_ENCRYPTED_PREFIX)
-        || raw.starts_with(LEGACY_ENCRYPTED_PREFIX)
-    {
-        // safe is fully migrated, so a legacy label here means an un-migrated file
-        // reached the serving path. Fail rather than serve it: the alternative is
-        // reading data the operator believes no longer exists.
+    } else if raw.starts_with(ENCRYPTED_SENTINEL) {
+        // Any other encrypted-ish label means an un-migrated or foreign file reached
+        // the serving path. Fail rather than serve it: the alternative is handing a
+        // caller a label string as a secret value.
         return Err(VaultError::Invalid);
     } else {
-        // Not ciphertext in any known form: a genuinely plaintext value.
+        // Not ciphertext in any form: a genuinely plaintext value.
         return Ok(raw.to_string());
     };
     if encoded.is_empty() {
@@ -416,7 +410,6 @@ mod tests {
         let (public, private) = keypair();
         let cipher = encrypt_value("hello", &public).expect("encrypt");
         assert!(cipher.starts_with(ENCRYPTED_PREFIX), "{cipher}");
-        assert!(!cipher.starts_with(LEGACY_SI_ENCRYPTED_PREFIX));
         assert_eq!(decrypt_value(&cipher, &[private]).expect("decrypt"), "hello");
     }
 
@@ -429,7 +422,7 @@ mod tests {
         let payload = cipher.strip_prefix(ENCRYPTED_PREFIX).expect("prefix");
         let keys = [private];
         assert_eq!(decrypt_value(&cipher, &keys).expect("current"), "payload");
-        for prefix in [LEGACY_SI_ENCRYPTED_PREFIX, LEGACY_ENCRYPTED_PREFIX] {
+        for prefix in ["encrypted:si-vault:", "encrypted:", "encrypted:unknown:"] {
             assert!(
                 decrypt_value(&format!("{prefix}{payload}"), &keys).is_err(),
                 "prefix {prefix} must be rejected"
@@ -476,10 +469,8 @@ mod tests {
         let (public, private) = keypair();
         let a = encrypt_value("alpha", &public).expect("encrypt");
         let b = encrypt_value("beta", &public).expect("encrypt");
-        let b_legacy = format!(
-            "{LEGACY_SI_ENCRYPTED_PREFIX}{}",
-            b.strip_prefix(ENCRYPTED_PREFIX).expect("prefix")
-        );
+        let b_legacy =
+            format!("encrypted:si-vault:{}", b.strip_prefix(ENCRYPTED_PREFIX).expect("prefix"));
         let keys = [private];
         assert_eq!(decrypt_value(&a, &keys).expect("a"), "alpha");
         assert!(decrypt_value(&b_legacy, &keys).is_err(), "legacy half must error");
