@@ -24,6 +24,7 @@ fn fort_e2e_roundtrip_preserves_vault_ciphertext_contract() {
     let refresh_path = state_dir.join("e2e.refresh");
     let access_path = state_dir.join("e2e.access");
     let admin_token_path = state_dir.join("admin.token");
+    let secret_value_path = state_dir.join("e2e-value");
 
     let admin_token = seed_state(&state_path, &keyring_path, &signing_key_path);
     fs::write(&admin_token_path, admin_token.as_bytes()).expect("write admin token");
@@ -145,6 +146,8 @@ fn fort_e2e_roundtrip_preserves_vault_ciphertext_contract() {
         ],
     );
     set_0600(&access_path);
+    fs::write(&secret_value_path, b"from-fort\n").expect("write secret value");
+    set_0600(&secret_value_path);
 
     run_ok(
         &fort,
@@ -160,8 +163,8 @@ fn fort_e2e_roundtrip_preserves_vault_ciphertext_contract() {
             "dev",
             "--key",
             "E2E_KEY",
-            "--value",
-            "from-fort",
+            "--value-file",
+            secret_value_path.to_str().unwrap(),
         ],
     );
     let get_output = run_capture(

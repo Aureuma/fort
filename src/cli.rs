@@ -75,8 +75,10 @@ struct SetArgs {
     env: String,
     #[arg(long)]
     key: String,
-    #[arg(long, default_value = "")]
-    value: String,
+    #[arg(long, conflicts_with = "value_file")]
+    value: Option<String>,
+    #[arg(long, conflicts_with = "value")]
+    value_file: Option<String>,
     #[arg(long, default_value_t = 0)]
     cas_version: i64,
 }
@@ -736,6 +738,7 @@ impl Client {
     }
 
     fn cmd_set(&self, args: SetArgs) -> Result<()> {
+        let value = resolve_set_value(&args)?;
         let (status, response) = self.api_request(
             Method::POST,
             "/v1/secrets/set",
@@ -743,7 +746,7 @@ impl Client {
                 "repo": args.repo,
                 "env": args.env,
                 "key": args.key,
-                "value": args.value,
+                "value": value,
                 "cas_version": args.cas_version
             })),
             true,
@@ -1728,6 +1731,13 @@ fn read_secret_file(path: &str) -> Result<String> {
     Ok(value)
 }
 
+fn resolve_set_value(args: &SetArgs) -> Result<String> {
+    match args.value_file.as_deref() {
+        Some(path) => read_secret_file(path).context("read --value-file"),
+        None => Ok(args.value.clone().unwrap_or_default()),
+    }
+}
+
 fn write_secret_file(path: &str, value: &str) -> Result<()> {
     let path = PathBuf::from(path.trim());
     if path.as_os_str().is_empty() {
@@ -2008,6 +2018,52 @@ fn sanitized_child_env(current: Vec<(String, String)>) -> BTreeMap<String, Strin
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn set_value_file_requires_a_strict_nonempty_secret_file() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("value");
+        fs::write(&path, "from-file\n").expect("write value");
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o600)).expect("chmod value");
+        let args = SetArgs {
+            repo: "example".to_string(),
+            env: "dev".to_string(),
+            key: "TOKEN".to_string(),
+            value: None,
+            value_file: Some(path.display().to_string()),
+            cas_version: 0,
+        };
+
+        assert_eq!(resolve_set_value(&args).expect("value file"), "from-file");
+
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).expect("chmod value");
+        assert!(
+            resolve_set_value(&args)
+                .expect_err("open permissions must fail")
+                .to_string()
+                .contains("read --value-file")
+        );
+    }
+
+    #[test]
+    fn set_rejects_value_and_value_file_together() {
+        let result = FortCli::try_parse_from([
+            "fort",
+            "set",
+            "--repo",
+            "example",
+            "--env",
+            "dev",
+            "--key",
+            "TOKEN",
+            "--value",
+            "on-argv",
+            "--value-file",
+            "/run/secrets/token",
+        ]);
+
+        assert!(result.is_err());
+    }
 
     #[test]
     fn npm_token_spec_requires_explicit_access_surface() {

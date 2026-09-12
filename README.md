@@ -92,6 +92,10 @@ fort agent create|get|list|set-status|rotate|remove
 fort agent policy get|set|add|remove|check
 ```
 
+Use `fort set --value-file <0600-path>` for credentials and other secret values.
+The legacy `--value` form remains available for non-sensitive fixtures, but it places
+the value in the process argument list and must not be used for real secrets.
+
 CLI host resolution order:
 1. `--host`
 2. `FORT_HOST`
