@@ -149,6 +149,87 @@ fn fort_e2e_roundtrip_preserves_vault_ciphertext_contract() {
     fs::write(&secret_value_path, b"from-fort\n").expect("write secret value");
     set_0600(&secret_value_path);
 
+    let scope_output = run_capture(
+        &fort,
+        &[
+            "--host",
+            &host,
+            "--token-file",
+            admin_token_path.to_str().unwrap(),
+            "scope",
+            "ensure",
+            "--repo",
+            "agentic-language-development",
+            "--env",
+            "dev",
+        ],
+    );
+    assert_eq!(
+        scope_output.trim(),
+        "scope agentic-language-development/dev created"
+    );
+    let existing_scope_output = run_capture(
+        &fort,
+        &[
+            "--host",
+            &host,
+            "--token-file",
+            admin_token_path.to_str().unwrap(),
+            "scope",
+            "ensure",
+            "--repo",
+            "agentic-language-development",
+            "--env",
+            "dev",
+        ],
+    );
+    assert_eq!(
+        existing_scope_output.trim(),
+        "scope agentic-language-development/dev exists"
+    );
+    run_ok(
+        &fort,
+        &[
+            "--host",
+            &host,
+            "--token-file",
+            admin_token_path.to_str().unwrap(),
+            "set",
+            "--repo",
+            "agentic-language-development",
+            "--env",
+            "dev",
+            "--key",
+            "E2E_SCOPE_KEY",
+            "--value-file",
+            secret_value_path.to_str().unwrap(),
+        ],
+    );
+    let scoped_value = run_capture(
+        &fort,
+        &[
+            "--host",
+            &host,
+            "--token-file",
+            admin_token_path.to_str().unwrap(),
+            "get",
+            "--repo",
+            "agentic-language-development",
+            "--env",
+            "dev",
+            "--key",
+            "E2E_SCOPE_KEY",
+        ],
+    );
+    assert_eq!(scoped_value.trim(), "from-fort");
+    let scoped_env = fs::read_to_string(
+        safe_root
+            .join("agentic-language-development")
+            .join(".env.dev"),
+    )
+    .expect("read scoped env");
+    assert!(scoped_env.contains("E2E_SCOPE_KEY=encrypted:vault:"));
+
     run_ok(
         &fort,
         &[

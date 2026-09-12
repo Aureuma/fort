@@ -141,6 +141,43 @@ impl Backend {
         write_dotenv(&path, &values).map_err(|_| VaultError::Io)
     }
 
+    pub fn ensure_scope(&self, repo: &str, env: &str) -> Result<bool, VaultError> {
+        let (repo, env) = normalize_target(repo, env)?;
+        let map_key = format!("{}/{}", repo.to_lowercase(), env.to_lowercase());
+        let _guard = self.write_lock.lock().expect("vault write lock poisoned");
+        let mut doc = self.read_keyring_doc()?;
+        self.validate_single_key_material(&doc)?;
+        if doc.entries.contains_key(&map_key)
+            || doc.entries.values().any(|entry| {
+                entry.repo.eq_ignore_ascii_case(&repo) && entry.env.eq_ignore_ascii_case(&env)
+            })
+        {
+            return Ok(false);
+        }
+        let source = doc
+            .entries
+            .values()
+            .find(|entry| {
+                !normalize_hex(&entry.public_key).is_empty()
+                    && !normalize_hex(&entry.private_key).is_empty()
+            })
+            .cloned()
+            .ok_or(VaultError::NotFound)?;
+        doc.entries.insert(
+            map_key,
+            KeyringEntry {
+                repo,
+                env,
+                public_key: source.public_key,
+                private_key: source.private_key,
+                backup_private_keys: Vec::new(),
+            },
+        );
+        self.validate_single_key_material(&doc)?;
+        write_keyring_doc(&self.keyring_path, &doc).map_err(|_| VaultError::Io)?;
+        Ok(true)
+    }
+
     fn env_file_path(&self, repo: &str, env: &str) -> PathBuf {
         self.safe_root.join(repo).join(format!(".env.{env}"))
     }
@@ -311,6 +348,21 @@ fn write_dotenv(path: &Path, values: &BTreeMap<String, String>) -> Result<()> {
     Ok(())
 }
 
+fn write_keyring_doc(path: &Path, doc: &KeyringDoc) -> Result<()> {
+    let mut raw = serde_json::to_string_pretty(doc).context("serialize vault keyring")?;
+    raw.push('\n');
+    let tmp = PathBuf::from(format!("{}.tmp", path.display()));
+    fs::write(&tmp, raw.as_bytes()).with_context(|| format!("write {}", tmp.display()))?;
+    fs::set_permissions(&tmp, fs::Permissions::from_mode(0o600))
+        .with_context(|| format!("chmod {}", tmp.display()))?;
+    if let Some((uid, gid)) = target_owner(path) {
+        #[cfg(unix)]
+        nixless_chown(&tmp, uid, gid).with_context(|| format!("chown {}", tmp.display()))?;
+    }
+    fs::rename(&tmp, path).with_context(|| format!("rename {}", path.display()))?;
+    Ok(())
+}
+
 fn target_owner(path: &Path) -> Option<(u32, u32)> {
     if let Ok(meta) = fs::metadata(path) {
         return Some((meta.uid(), meta.gid()));
@@ -402,7 +454,69 @@ mod tests {
 
     fn keypair() -> (String, String) {
         let (secret, public) = ecies::utils::generate_keypair();
-        (hex::encode(public.serialize_compressed()), hex::encode(secret.serialize()))
+        (
+            hex::encode(public.serialize_compressed()),
+            hex::encode(secret.serialize()),
+        )
+    }
+
+    #[test]
+    fn ensure_scope_reuses_canonical_key_material_idempotently() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let safe_root = temp.path().join("safe");
+        let keyring_path = temp.path().join("vault-keyring.json");
+        fs::create_dir_all(&safe_root).expect("mkdir safe");
+        let (public, private) = keypair();
+        let original = KeyringDoc {
+            entries: BTreeMap::from([(
+                "safe/dev".to_string(),
+                KeyringEntry {
+                    repo: "safe".to_string(),
+                    env: "dev".to_string(),
+                    public_key: public,
+                    private_key: private,
+                    backup_private_keys: Vec::new(),
+                },
+            )]),
+        };
+        write_keyring_doc(&keyring_path, &original).expect("write keyring");
+        let backend = Backend::new(Config {
+            safe_root: safe_root.display().to_string(),
+            keyring_path: keyring_path.display().to_string(),
+            extra_priv_keys: Vec::new(),
+        })
+        .expect("backend");
+
+        assert!(
+            backend
+                .ensure_scope("agentic-language-development", "dev")
+                .expect("create scope")
+        );
+        assert!(
+            !backend
+                .ensure_scope("agentic-language-development", "dev")
+                .expect("scope exists")
+        );
+        let updated = backend.read_keyring_doc().expect("read updated keyring");
+        backend
+            .validate_single_key_material(&updated)
+            .expect("single key material");
+        let created = updated
+            .entries
+            .get("agentic-language-development/dev")
+            .expect("created entry");
+        let canonical = updated.entries.get("safe/dev").expect("canonical entry");
+        assert_eq!(created.public_key, canonical.public_key);
+        assert_eq!(created.private_key, canonical.private_key);
+        assert!(created.backup_private_keys.is_empty());
+        assert_eq!(
+            fs::metadata(&keyring_path)
+                .expect("metadata")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
     }
 
     #[test]
@@ -410,7 +524,10 @@ mod tests {
         let (public, private) = keypair();
         let cipher = encrypt_value("hello", &public).expect("encrypt");
         assert!(cipher.starts_with(ENCRYPTED_PREFIX), "{cipher}");
-        assert_eq!(decrypt_value(&cipher, &[private]).expect("decrypt"), "hello");
+        assert_eq!(
+            decrypt_value(&cipher, &[private]).expect("decrypt"),
+            "hello"
+        );
     }
 
     /// Steady state: only the current label is served. A legacy label means an
@@ -441,7 +558,10 @@ mod tests {
             "encrypted:si-vault:!!!not-base64!!!",
             "encrypted:!!!not-base64!!!",
         ] {
-            assert!(decrypt_value(bad, &keys).is_err(), "{bad} should not fall through");
+            assert!(
+                decrypt_value(bad, &keys).is_err(),
+                "{bad} should not fall through"
+            );
         }
     }
 
@@ -449,7 +569,10 @@ mod tests {
     fn genuinely_plaintext_values_pass_through() {
         let (_public, private) = keypair();
         let keys = [private];
-        assert_eq!(decrypt_value("plain-value", &keys).expect("plain"), "plain-value");
+        assert_eq!(
+            decrypt_value("plain-value", &keys).expect("plain"),
+            "plain-value"
+        );
         assert_eq!(decrypt_value("", &keys).expect("empty"), "");
     }
 
@@ -458,7 +581,10 @@ mod tests {
     #[test]
     fn empty_payload_forms_decrypt_to_empty() {
         let (public, private) = keypair();
-        assert_eq!(encrypt_value("", &public).expect("encrypt"), ENCRYPTED_PREFIX);
+        assert_eq!(
+            encrypt_value("", &public).expect("encrypt"),
+            ENCRYPTED_PREFIX
+        );
         let keys = [private];
         assert_eq!(decrypt_value(ENCRYPTED_PREFIX, &keys).expect("decrypt"), "");
     }
@@ -469,10 +595,15 @@ mod tests {
         let (public, private) = keypair();
         let a = encrypt_value("alpha", &public).expect("encrypt");
         let b = encrypt_value("beta", &public).expect("encrypt");
-        let b_legacy =
-            format!("encrypted:si-vault:{}", b.strip_prefix(ENCRYPTED_PREFIX).expect("prefix"));
+        let b_legacy = format!(
+            "encrypted:si-vault:{}",
+            b.strip_prefix(ENCRYPTED_PREFIX).expect("prefix")
+        );
         let keys = [private];
         assert_eq!(decrypt_value(&a, &keys).expect("a"), "alpha");
-        assert!(decrypt_value(&b_legacy, &keys).is_err(), "legacy half must error");
+        assert!(
+            decrypt_value(&b_legacy, &keys).is_err(),
+            "legacy half must error"
+        );
     }
 }

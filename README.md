@@ -86,6 +86,7 @@ fort get
 fort set
 fort list
 fort batch-get
+fort scope ensure
 fort run
 fort rotate npm
 fort agent create|get|list|set-status|rotate|remove
@@ -95,6 +96,10 @@ fort agent policy get|set|add|remove|check
 Use `fort set --value-file <0600-path>` for credentials and other secret values.
 The legacy `--value` form remains available for non-sensitive fixtures, but it places
 the value in the process argument list and must not be used for real secrets.
+
+An administrator can create an exact repository/environment encryption scope with
+`fort scope ensure --repo <repo> --env <env>`. The operation reuses Fort's established
+single canonical keypair, is idempotent and audited, and never returns key material.
 
 CLI host resolution order:
 1. `--host`

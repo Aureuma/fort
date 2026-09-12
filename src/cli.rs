@@ -50,6 +50,7 @@ enum FortCommand {
     List(ListArgs),
     #[command(name = "batch-get")]
     BatchGet(BatchGetArgs),
+    Scope(ScopeCommand),
     Run(RunArgs),
     Rotate(Box<RotateCommand>),
     Agent(AgentCommand),
@@ -101,6 +102,25 @@ struct BatchGetArgs {
     env: String,
     #[arg(long)]
     keys: String,
+}
+
+#[derive(Args)]
+struct ScopeCommand {
+    #[command(subcommand)]
+    command: ScopeSubcommand,
+}
+
+#[derive(Subcommand)]
+enum ScopeSubcommand {
+    Ensure(ScopeEnsureArgs),
+}
+
+#[derive(Args)]
+struct ScopeEnsureArgs {
+    #[arg(long)]
+    repo: String,
+    #[arg(long)]
+    env: String,
 }
 
 #[derive(Args)]
@@ -419,6 +439,7 @@ impl Client {
             FortCommand::Set(args) => self.cmd_set(args),
             FortCommand::List(args) => self.cmd_list(args),
             FortCommand::BatchGet(args) => self.cmd_batch_get(args),
+            FortCommand::Scope(command) => self.cmd_scope(command.command),
             FortCommand::Run(args) => self.cmd_run(args),
             FortCommand::Rotate(command) => self.cmd_rotate(command.command),
             FortCommand::Agent(command) => self.cmd_agent(command.command),
@@ -801,6 +822,36 @@ impl Client {
             Ok(())
         } else {
             print_json(&response)
+        }
+    }
+
+    fn cmd_scope(&self, command: ScopeSubcommand) -> Result<()> {
+        self.require_admin_token()?;
+        match command {
+            ScopeSubcommand::Ensure(args) => {
+                let (status, response) = self.api_request(
+                    Method::POST,
+                    "/v1/scopes/ensure",
+                    Some(json!({ "repo": args.repo, "env": args.env })),
+                    true,
+                )?;
+                ensure_status(status, 200, &response)?;
+                if self.json {
+                    print_json(&response)
+                } else {
+                    println!(
+                        "scope {}/{} {}",
+                        response["repo"].as_str().unwrap_or_default(),
+                        response["env"].as_str().unwrap_or_default(),
+                        if response["created"].as_bool().unwrap_or(false) {
+                            "created"
+                        } else {
+                            "exists"
+                        }
+                    );
+                    Ok(())
+                }
+            }
         }
     }
 

@@ -102,6 +102,7 @@ fn router(state: AppState) -> Router {
         .route("/v1/secrets/batch-get", post(handle_secret_batch_get))
         .route("/v1/secrets/list", post(handle_secret_list))
         .route("/v1/secrets/set", post(handle_secret_set))
+        .route("/v1/scopes/ensure", post(handle_scope_ensure))
         .route("/v1/run/session/open", post(handle_run_session_open))
         .route(
             "/v1/run/session/materialize",
@@ -829,6 +830,55 @@ async fn handle_secret_set(
         "",
     );
     Ok(Json(json!({ "ok": true, "version": 1 })))
+}
+
+#[derive(Deserialize)]
+struct ScopeEnsureRequest {
+    repo: String,
+    env: String,
+}
+
+async fn handle_scope_ensure(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<ScopeEnsureRequest>,
+) -> Result<Json<Value>, ApiError> {
+    let actor = require_admin(&headers, &state)?;
+    let repo = request.repo.trim();
+    let env = request.env.trim();
+    if repo.is_empty() || env.is_empty() {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "repo and env are required",
+        ));
+    }
+    let created = state
+        .vault
+        .ensure_scope(repo, env)
+        .map_err(|error| match error {
+            VaultError::NotFound => ApiError::new(
+                StatusCode::PRECONDITION_FAILED,
+                "canonical key material is unavailable",
+            ),
+            VaultError::Invalid => ApiError::new(StatusCode::BAD_REQUEST, "invalid secret target"),
+            VaultError::KeySprawl => ApiError::new(StatusCode::CONFLICT, "key sprawl detected"),
+            VaultError::Io => {
+                ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "scope ensure failed")
+            }
+        })?;
+    add_audit(
+        &state,
+        &actor.agent_id,
+        "scope_ensure",
+        repo,
+        env,
+        "",
+        "allow",
+        if created { "created" } else { "exists" },
+    );
+    Ok(Json(
+        json!({ "repo": repo, "env": env, "created": created }),
+    ))
 }
 
 #[derive(Deserialize)]
