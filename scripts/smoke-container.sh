@@ -15,6 +15,8 @@ ADMIN_TOKEN_PATH="$STATE_DIR/admin.token"
 ADMIN_TOKEN="$(STATE_PATH="$STATE_DIR/state.json" KEYRING_PATH="$STATE_DIR/vault-keyring.json" SIGNING_KEY_PATH="$STATE_DIR/jwt-signing.key" cargo run --quiet --bin fort-seed)"
 printf '%s' "$ADMIN_TOKEN" > "$ADMIN_TOKEN_PATH"
 chmod 600 "$ADMIN_TOKEN_PATH"
+printf '%s' 'smoke-test-pepper-that-is-long-enough-32' > "$STATE_DIR/github-pepper"
+chmod 600 "$STATE_DIR/github-pepper"
 docker run -d \
   --name fort-smoke \
   -v "$STATE_DIR:/var/lib/fort" \
