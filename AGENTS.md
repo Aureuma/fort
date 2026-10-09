@@ -45,16 +45,16 @@ Fort state is limited to:
 - The Vault keyring in this architecture is a file-backed JSON state (`~/.vault/keyring.json` by default), not an OS keychain primitive.
 ## Deployment Contract
 - Fort is publicly routed through Viva.
-- Public HTTPS endpoint is environment-specific and must be configured in infra plus `~/.si/fort/settings.toml` `[fort].host`.
+- Public HTTPS endpoint is environment-specific and must be configured in infra plus `~/.fort/settings.toml` `[fort].host`.
 - Runtime mounts must include:
   - `FORT_STATE_PATH`
   - `FORT_SAFE_ROOT`
   - `FORT_VAULT_KEYRING_FILE`
   - `FORT_JWT_SIGNING_KEY_FILE`
   - workload refresh-token file paths used by `fort-agent`
-- Auth file contract (native; the `si fort` wrapper is retired):
+- Auth file contract (native `fort` only; there is no wrapper CLI):
   - bootstrap/admin auth file: `FORT_BOOTSTRAP_TOKEN_FILE`
-  - runtime session files: managed `CODEX_HOME/fort/access.token` and `CODEX_HOME/fort/refresh.token`, refreshed in place by native `fort`
+  - runtime session files: managed `$FORT_SESSION_DIR/access.token` and `$FORT_SESSION_DIR/refresh.token` (default `~/.fort/session/`), refreshed in place by native `fort`
 ## Regression Policy
 Treat the following as regressions:
 - auth bypass or hidden bootstrap path

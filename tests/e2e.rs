@@ -1225,11 +1225,9 @@ fn fort_backend_fails_fast_when_safe_root_or_keyring_mounts_are_wrong() {
 }
 
 #[test]
-fn fort_cli_rejects_codex_profile_refresh_token_rotation_to_detached_path() {
+fn fort_cli_rejects_managed_refresh_token_rotation_to_detached_path() {
     let temp = TempDir::new().expect("tempdir");
-    let refresh_path = temp
-        .path()
-        .join(".si/codex/profiles/profile-zeta/fort/refresh.token");
+    let refresh_path = temp.path().join(".fort/session/refresh.token");
     fs::create_dir_all(refresh_path.parent().expect("refresh parent")).expect("mkdir fort dir");
     fs::write(&refresh_path, "profile-refresh-token\n").expect("write profile refresh token");
     set_0600(&refresh_path);
@@ -1261,7 +1259,7 @@ fn fort_cli_rejects_codex_profile_refresh_token_rotation_to_detached_path() {
         "detached refresh token should not be written"
     );
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("refusing to rotate Codex profile Fort refresh token"));
+    assert!(stderr.contains("refusing to rotate managed Fort refresh token"));
     assert!(stderr.contains("refreshed in place"));
 }
 
@@ -1466,7 +1464,7 @@ fn fort_breakglass_issues_single_active_admin_token() {
 }
 
 #[test]
-fn fort_cli_uses_managed_codex_session_like_si_fort() {
+fn fort_cli_uses_managed_session_without_flags() {
     let temp = TempDir::new().expect("tempdir");
     let state_dir = temp.path().join("state");
     let safe_root = temp.path().join("safe");
@@ -1481,8 +1479,7 @@ fn fort_cli_uses_managed_codex_session_like_si_fort() {
     let admin_token_path = state_dir.join("admin.token");
     let secret_value_path = state_dir.join("managed-value");
     let missing_settings = state_dir.join("missing-settings.toml");
-    let codex_home = temp.path().join("codex");
-    let managed_dir = codex_home.join("fort");
+    let managed_dir = temp.path().join("session");
     fs::create_dir_all(&managed_dir).expect("mkdir managed fort dir");
     let managed_refresh = managed_dir.join("refresh.token");
     let managed_access = managed_dir.join("access.token");
@@ -1619,7 +1616,7 @@ fn fort_cli_uses_managed_codex_session_like_si_fort() {
                 "--format",
                 "raw",
             ])
-            .env("CODEX_HOME", &codex_home)
+            .env("FORT_SESSION_DIR", &managed_dir)
             .env("FORT_SETTINGS_FILE", &missing_settings)
             .env_remove("FORT_HOST")
             .env_remove("FORT_TOKEN_PATH")

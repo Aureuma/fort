@@ -449,8 +449,8 @@ impl Client {
         })
     }
 
-    /// Managed Codex session support (the `si fort` wrapper behavior): when no
-    /// explicit token source is in play and a `$CODEX_HOME/fort/refresh.token`
+    /// Managed session support: when no explicit token source is in play and a
+    /// `$FORT_SESSION_DIR/refresh.token` (default `~/.fort/session/refresh.token`)
     /// session exists, bootstrap or refresh the access token in place so plain
     /// `fort get ...` works inside managed runtimes with no extra flags.
     fn ensure_fresh_managed_token(&mut self) -> Result<()> {
@@ -474,7 +474,7 @@ impl Client {
             Some(json!({ "refresh_token": refresh_token })),
             false,
         )?;
-        ensure_status(status, 200, &response).context("refresh managed Codex session")?;
+        ensure_status(status, 200, &response).context("refresh managed session")?;
         let access_token = response["access_token"]
             .as_str()
             .unwrap_or_default()
@@ -717,7 +717,7 @@ impl Client {
                 let out_path = args
                     .refresh_token_out
                     .unwrap_or_else(|| args.refresh_token_file.clone());
-                guard_codex_profile_refresh_token_rotation(
+                guard_managed_refresh_token_rotation(
                     Path::new(&args.refresh_token_file),
                     Path::new(&out_path),
                 )?;
@@ -1723,7 +1723,7 @@ fn resolve_host(flag_host: Option<String>) -> Result<String> {
     };
     if candidate.trim().is_empty() {
         bail!(
-            "fort host is required (set --host, FORT_HOST, or ~/.si/fort/settings.toml [fort].host)"
+            "fort host is required (set --host, FORT_HOST, or ~/.fort/settings.toml [fort].host)"
         );
     }
     let parsed = Url::parse(candidate.trim())
@@ -1771,20 +1771,24 @@ fn resolve_token(flag_token_file: Option<String>) -> Result<ResolvedToken> {
     })
 }
 
-fn codex_fort_dir() -> Option<PathBuf> {
-    let home = env::var("CODEX_HOME").ok()?;
+fn fort_session_dir() -> Option<PathBuf> {
+    let explicit = env::var("FORT_SESSION_DIR").unwrap_or_default();
+    if !explicit.trim().is_empty() {
+        return Some(PathBuf::from(explicit.trim()));
+    }
+    let home = env::var("HOME").ok()?;
     if home.trim().is_empty() {
         return None;
     }
-    Some(PathBuf::from(home.trim()).join("fort"))
+    Some(PathBuf::from(home.trim()).join(".fort/session"))
 }
 
 fn managed_access_token_path() -> Option<String> {
-    codex_fort_dir().map(|dir| dir.join("access.token").display().to_string())
+    fort_session_dir().map(|dir| dir.join("access.token").display().to_string())
 }
 
 fn managed_refresh_token_path() -> Option<String> {
-    codex_fort_dir().map(|dir| dir.join("refresh.token").display().to_string())
+    fort_session_dir().map(|dir| dir.join("refresh.token").display().to_string())
 }
 
 const MANAGED_REFRESH_SKEW_SECONDS: i64 = 30;
@@ -1807,18 +1811,18 @@ fn jwt_exp(token: &str) -> Option<i64> {
     value.get("exp")?.as_i64()
 }
 
-fn guard_codex_profile_refresh_token_rotation(
+fn guard_managed_refresh_token_rotation(
     refresh_token_file: &Path,
     refresh_token_out: &Path,
 ) -> Result<()> {
-    if !is_codex_profile_refresh_token_path(refresh_token_file) {
+    if !is_managed_refresh_token_path(refresh_token_file) {
         return Ok(());
     }
     let refresh_token_file = normalize_path_components(refresh_token_file.to_path_buf());
     let refresh_token_out = normalize_path_components(refresh_token_out.to_path_buf());
     if refresh_token_file != refresh_token_out {
         bail!(
-            "refusing to rotate Codex profile Fort refresh token {} into {}; profile refresh tokens must be refreshed in place",
+            "refusing to rotate managed Fort refresh token {} into {}; managed refresh tokens must be refreshed in place",
             refresh_token_file.display(),
             refresh_token_out.display()
         );
@@ -1826,7 +1830,7 @@ fn guard_codex_profile_refresh_token_rotation(
     Ok(())
 }
 
-fn is_codex_profile_refresh_token_path(path: &Path) -> bool {
+fn is_managed_refresh_token_path(path: &Path) -> bool {
     let normalized = normalize_path_components(path.to_path_buf());
     let parts = normalized
         .components()
@@ -1835,12 +1839,10 @@ fn is_codex_profile_refresh_token_path(path: &Path) -> bool {
             _ => None,
         })
         .collect::<Vec<_>>();
-    parts.len() >= 6
+    parts.len() >= 3
         && parts[parts.len() - 1] == "refresh.token"
-        && parts[parts.len() - 2] == "fort"
-        && parts[parts.len() - 4] == "profiles"
-        && parts[parts.len() - 5] == "codex"
-        && parts[parts.len() - 6] == ".si"
+        && parts[parts.len() - 2] == "session"
+        && parts[parts.len() - 3] == ".fort"
 }
 
 fn normalize_path_components(path: PathBuf) -> PathBuf {

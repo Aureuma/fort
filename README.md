@@ -1,6 +1,6 @@
 # fort
 
-`fort` is the SI policy/authentication API for Vault operations.
+`fort` is the policy/authentication API for Vault operations.
 
 See also:
 - `docs/GUIDING_PRINCIPLES.md`
@@ -104,7 +104,7 @@ single canonical keypair, is idempotent and audited, and never returns key mater
 CLI host resolution order:
 1. `--host`
 2. `FORT_HOST`
-3. `~/.si/fort/settings.toml` `[fort].host` (or `~/.si/settings.toml` `[fort].host`)
+3. `~/.fort/settings.toml` `[fort].host` (`FORT_SETTINGS_FILE` overrides the path)
 
 `fort run` performs `open -> materialize -> close` session flow.
 
@@ -153,20 +153,20 @@ CLI token sources:
 1. `--token-file`
 2. `FORT_TOKEN_PATH`
 3. `FORT_BOOTSTRAP_TOKEN_FILE`
-4. managed Codex runtime session at `$CODEX_HOME/fort/access.token` (last resort)
+4. managed session at `$FORT_SESSION_DIR/access.token` (default `~/.fort/session/access.token`, last resort)
 
-Use `FORT_TOKEN_PATH` only for managed runtime environments. SI-managed Codex runtime auth is owned by `si codex spawn` / `si codex shell`, which pass explicit token files to native `fort`.
+Use `FORT_TOKEN_PATH` only for managed runtime environments where the
+orchestrator passes explicit token files to `fort`.
 
 Deprecated token-value env vars are disallowed:
 - `FORT_TOKEN`
 - `FORT_REFRESH_TOKEN`
 
-For managed runtime workers, native `fort` subsumes the retired `si fort`
-wrapper path: when no explicit token source is configured and
-`$CODEX_HOME/fort/refresh.token` exists, `fort` refreshes the managed session
+For managed runtimes: when no explicit token source is configured and
+`$FORT_SESSION_DIR/refresh.token` exists, `fort` refreshes the managed session
 as needed. A missing or near-expiry access token is bootstrapped from the
 refresh token, the new access token is written to
-`$CODEX_HOME/fort/access.token`, and the refresh token is rotated in place.
+`$FORT_SESSION_DIR/access.token`, and the refresh token is rotated in place.
 Explicit token sources always win and never trigger a managed refresh. Auth
 stays file-based (no bearer token argv flow), so plain commands work directly:
 
@@ -180,9 +180,7 @@ fort --host https://fort.aureuma.ai doctor
   - `fort auth session open --agent <id> --refresh-token-out <path>`
   - `fort auth session refresh --refresh-token-file <path> [--refresh-token-out <path>]`
   - `fort-agent --refresh-token-file <path> --token-path <path>`
-- Codex profile refresh tokens must be refreshed in place:
-  - `~/.si/codex/profiles/<profile>/fort/refresh.token` for `primary`
-  - `~/.si/codex/profiles/<profile>/workers/<slot>/fort/refresh.token` for non-primary slots
+- Managed refresh tokens live at `$FORT_SESSION_DIR/refresh.token` (default `~/.fort/session/refresh.token`) and must be refreshed in place.
 - Refresh token files must be regular files with `0600` (or stricter) permissions.
 - `fort-agent` enforces regular-file checks and strict permission checks on refresh-token files.
 

@@ -31,7 +31,7 @@ Fort is not a secret database. It must remain a thin API wrapper over Vault-back
 - Documented and enforced file-only refresh-token handling.
 - Added/kept integration coverage for:
   - Fort container smoke flow
-  - SI↔Fort↔Vault end-to-end flow
+  - Fort↔Vault end-to-end flow
   - manual Vault decrypt parity checks
 
 ## Non-Goals
@@ -57,11 +57,11 @@ Fort is not a secret database. It must remain a thin API wrapper over Vault-back
 - `backup_private_keys` sprawl is disallowed.
 
 ### Runtime Access Model
-- Runtime workers access secrets through native `fort ...` with managed `$CODEX_HOME/fort/` sessions.
-- Direct local `vault` secret commands are blocked in SI runtime workers.
+- Runtime workers access secrets through native `fort ...` with managed `$FORT_SESSION_DIR/` sessions (default `~/.fort/session/`).
+- Direct local `vault` secret commands are blocked in managed runtime workers; all secret access goes through Fort.
 - Host/admin operations may use `vault` for local maintenance workflows.
 - Bootstrap/admin auth resolves from `FORT_BOOTSTRAP_TOKEN_FILE`.
-- Runtime sessions resolve from the managed Codex profile session under `CODEX_HOME/fort/`; `FORT_TOKEN_PATH` and `FORT_REFRESH_TOKEN_PATH` are internal runtime env values, not general operator fallbacks.
+- Runtime sessions resolve from the managed Fort session directory; `FORT_TOKEN_PATH` and `FORT_REFRESH_TOKEN_PATH` are internal runtime env values, not general operator fallbacks.
 
 ### Token & Session Security
 - Access tokens are short-lived JWT bearer tokens.
@@ -77,7 +77,7 @@ Fort is not a secret database. It must remain a thin API wrapper over Vault-back
 - Fort refresh token and signing key files: `0600`.
 
 ### Deployment Invariants
-- Hosted Fort endpoint is configured in `~/.si/fort/settings.toml` (`[fort].host` / `runtime_host`).
+- Hosted Fort endpoint is configured in `~/.fort/settings.toml` (`[fort].host`).
 - Production and operator-facing Fort access must resolve through the public HTTPS endpoint, for example `https://fort.aureuma.ai`.
 - Loopback addresses, local container IPs, and ad-hoc private hostnames are not valid steady-state runtime endpoints for Fort-backed workflows.
 - Localhost and private-address exposure are permitted only for development, isolated integration tests, or break/fix debugging that is explicitly temporary.

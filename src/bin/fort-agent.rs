@@ -10,7 +10,7 @@ struct Cli {
     host: Option<String>,
     #[arg(long)]
     refresh_token_file: Option<String>,
-    #[arg(long, default_value = "/run/si/fort/access.token")]
+    #[arg(long, default_value = "/run/fort/access.token")]
     token_path: String,
     #[arg(long, default_value_t = 0.70)]
     refresh_ratio: f64,
@@ -42,7 +42,7 @@ fn run() -> anyhow::Result<()> {
         .unwrap_or_else(fort::hostcfg::host_from_settings);
     if host.trim().is_empty() {
         anyhow::bail!(
-            "fort host is required (set FORT_HOST or ~/.si/fort/settings.toml [fort].host)"
+            "fort host is required (set FORT_HOST or ~/.fort/settings.toml [fort].host)"
         );
     }
     let refresh_token_file = cli

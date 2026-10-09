@@ -20,10 +20,10 @@ fn settings_paths() -> Vec<PathBuf> {
     if home.trim().is_empty() {
         return Vec::new();
     }
-    vec![
-        PathBuf::from(format!("{}/.si/fort/settings.toml", home.trim())),
-        PathBuf::from(format!("{}/.si/settings.toml", home.trim())),
-    ]
+    vec![PathBuf::from(format!(
+        "{}/.fort/settings.toml",
+        home.trim()
+    ))]
 }
 
 fn parse_host_from_file(path: &PathBuf) -> Option<String> {
