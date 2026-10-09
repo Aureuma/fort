@@ -82,6 +82,7 @@ fort doctor
 fort version
 fort auth issue|login|whoami|list|revoke
 fort auth session open|refresh|close
+fort auth github login|logout|enroll|unenroll|list
 fort get
 fort set
 fort list
@@ -173,6 +174,40 @@ stays file-based (no bearer token argv flow), so plain commands work directly:
 ```bash
 fort --host https://fort.aureuma.ai doctor
 ```
+
+## GitHub PAT Login (Remote Machines)
+
+Remote machines authenticate with a GitHub fine-grained PAT. Fort verifies the
+PAT live against the GitHub API (`GET /user`) and maps it to a Fort agent via
+an HMAC-SHA256 fingerprint keyed by a server-side pepper. The PAT itself is
+never stored, logged, or echoed — only the fingerprint is persisted.
+
+```bash
+# one-time per machine (admin enrolls the machine's PAT fingerprint)
+fort --host https://fort.aureuma.ai --token-file admin.token \
+  agent create --id machine-vanguarda --type workload
+fort --host https://fort.aureuma.ai --token-file admin.token \
+  agent policy set --id machine-vanguarda --bind '*:*:*'
+fort --host https://fort.aureuma.ai --token-file admin.token \
+  auth github enroll --agent machine-vanguarda --pat-file machine.pat
+
+# on the machine: log in (writes the managed session, no flags needed after)
+fort --host https://fort.aureuma.ai auth github login --pat-file machine.pat
+fort --host https://fort.aureuma.ai get --repo safe --env prod --key NPM_TOKEN
+fort --host https://fort.aureuma.ai auth github logout
+```
+
+Rules:
+
+- `--pat-file` must point to a `0600` file. PATs are never accepted via argv or
+  environment variables.
+- The CLI refuses to send a PAT over plaintext HTTP except to loopback hosts
+  (isolated integration tests). Production login is HTTPS-only.
+- Server config needs `github_pepper_file` (a `0600` file with 32+ characters);
+  without it the github endpoints return `503`. `github_api_base` defaults to
+  `https://api.github.com` and only needs overriding in tests.
+- Login attempts are throttled per source IP and audited (fingerprint prefix
+  only, never the PAT).
 
 ## Refresh Token Handling (File-Only)
 - Do not pass refresh tokens via environment variables.

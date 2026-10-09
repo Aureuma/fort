@@ -11,8 +11,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::model::{
-    Agent, AgentStatus, AgentType, AuditEvent, Binding, Operation, Policy, RefreshSession,
-    RunSession, TokenRecord,
+    Agent, AgentStatus, AgentType, AuditEvent, Binding, Operation, PatFingerprint, Policy,
+    RefreshSession, RunSession, TokenRecord,
 };
 
 #[derive(Debug, Error)]
@@ -37,6 +37,8 @@ struct PersistentState {
     refresh_sessions: BTreeMap<String, RefreshSession>,
     #[serde(default)]
     sessions: BTreeMap<String, RunSession>,
+    #[serde(default)]
+    pat_fingerprints: BTreeMap<String, PatFingerprint>,
     #[serde(default)]
     audit: Vec<AuditEvent>,
 }
@@ -302,9 +304,102 @@ impl Store {
             .refresh_sessions
             .retain(|_, session| session.agent_id != id);
         state.sessions.retain(|_, session| session.agent_id != id);
+        state
+            .pat_fingerprints
+            .retain(|_, entry| entry.agent_id != id);
         self.persist_locked(&state)
             .map_err(|_| StoreError::Invalid)?;
         Ok(())
+    }
+
+    /// Bind a PAT fingerprint to an agent. One fingerprint per agent: any prior
+    /// fingerprint for the agent is replaced. A fingerprint already bound to a
+    /// different agent is a conflict.
+    pub fn put_pat_fingerprint(
+        &self,
+        fingerprint: &str,
+        agent_id: &str,
+        github_login: &str,
+        now: DateTime<Utc>,
+    ) -> Result<PatFingerprint, StoreError> {
+        self.refresh_from_disk_if_stale()
+            .map_err(|_| StoreError::Invalid)?;
+        let fingerprint = fingerprint.trim();
+        let agent_id = agent_id.trim();
+        if fingerprint.is_empty() || agent_id.is_empty() {
+            return Err(StoreError::Invalid);
+        }
+        let mut state = self.state.write().expect("store lock poisoned");
+        if let Some(existing) = state.pat_fingerprints.get(fingerprint)
+            && existing.agent_id != agent_id
+        {
+            return Err(StoreError::Conflict);
+        }
+        state
+            .pat_fingerprints
+            .retain(|_, entry| entry.agent_id != agent_id);
+        let entry = PatFingerprint {
+            fingerprint: fingerprint.to_string(),
+            agent_id: agent_id.to_string(),
+            github_login: github_login.trim().to_string(),
+            created_at: now,
+        };
+        state
+            .pat_fingerprints
+            .insert(fingerprint.to_string(), entry.clone());
+        self.persist_locked(&state)
+            .map_err(|_| StoreError::Invalid)?;
+        Ok(entry)
+    }
+
+    pub fn get_pat_fingerprint(
+        &self,
+        fingerprint: &str,
+    ) -> Result<PatFingerprint, StoreError> {
+        self.refresh_from_disk_if_stale()
+            .map_err(|_| StoreError::Invalid)?;
+        self.state
+            .read()
+            .expect("store lock poisoned")
+            .pat_fingerprints
+            .get(fingerprint.trim())
+            .cloned()
+            .ok_or(StoreError::NotFound)
+    }
+
+    pub fn remove_pat_fingerprints_for_agent(
+        &self,
+        agent_id: &str,
+    ) -> Result<usize, StoreError> {
+        self.refresh_from_disk_if_stale()
+            .map_err(|_| StoreError::Invalid)?;
+        let agent_id = agent_id.trim();
+        let mut state = self.state.write().expect("store lock poisoned");
+        let before = state.pat_fingerprints.len();
+        state
+            .pat_fingerprints
+            .retain(|_, entry| entry.agent_id != agent_id);
+        let removed = before - state.pat_fingerprints.len();
+        if removed == 0 {
+            return Err(StoreError::NotFound);
+        }
+        self.persist_locked(&state)
+            .map_err(|_| StoreError::Invalid)?;
+        Ok(removed)
+    }
+
+    pub fn list_pat_fingerprints(&self) -> Vec<PatFingerprint> {
+        let _ = self.refresh_from_disk_if_stale();
+        let mut out: Vec<_> = self
+            .state
+            .read()
+            .expect("store lock poisoned")
+            .pat_fingerprints
+            .values()
+            .cloned()
+            .collect();
+        out.sort_by(|a, b| a.agent_id.cmp(&b.agent_id));
+        out
     }
 
     pub fn get_policy(&self, agent_id: &str) -> Result<Policy, StoreError> {

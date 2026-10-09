@@ -12,6 +12,7 @@ Fort is not a secret database. It must remain a thin API wrapper over Vault-back
 
 ## Authentication Model
 - Workloads use short-lived JWT access tokens.
+- Remote machines log in with GitHub fine-grained PATs, verified live via `GET /user` and bound to agents by peppered HMAC-SHA256 fingerprints (PATs never persisted).
 - Refresh uses rotating opaque refresh tokens.
 - Only one active refresh session is allowed per agent at a time.
 - Refresh-token reuse is compromise and revokes session state.

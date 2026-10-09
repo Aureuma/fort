@@ -20,6 +20,7 @@ Fort state is limited to:
 - Admin operations require wildcard admin policy (`*:*:*`) on the calling agent.
 - Workload access is policy-scoped by `repo`, `env`, and operation.
 - Access tokens are short-lived JWTs with strict claim validation (`iss/sub/aud/jti/iat/nbf/exp`).
+- Remote machines authenticate with GitHub fine-grained PATs, verified live against the GitHub API and mapped to agents by HMAC-SHA256 fingerprints. PAT values are never persisted, logged, or echoed.
 - Refresh sessions use rotating opaque refresh tokens with reuse detection and compromise revocation.
 - Only one active refresh session is allowed per agent; opening a new one revokes prior active sessions.
 - `fort-breakglass-admin` must have a single active break-glass auth state; reissue revokes prior active tokens/sessions.
@@ -51,6 +52,7 @@ Fort state is limited to:
   - `FORT_SAFE_ROOT`
   - `FORT_VAULT_KEYRING_FILE`
   - `FORT_JWT_SIGNING_KEY_FILE`
+  - `FORT_GITHUB_PEPPER_FILE` (PAT fingerprint pepper, `0600`)
   - workload refresh-token file paths used by `fort-agent`
 - Auth file contract (native `fort` only; there is no wrapper CLI):
   - bootstrap/admin auth file: `FORT_BOOTSTRAP_TOKEN_FILE`

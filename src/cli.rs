@@ -225,6 +225,7 @@ enum AuthSubcommand {
     List(AuthListArgs),
     Revoke(AuthRevokeArgs),
     Session(AuthSessionCommand),
+    Github(AuthGithubCommand),
 }
 
 #[derive(Args)]
@@ -294,6 +295,47 @@ struct AuthSessionCloseArgs {
     session_id: String,
     #[arg(long)]
     refresh_token_file: Option<String>,
+}
+
+#[derive(Args)]
+struct AuthGithubCommand {
+    #[command(subcommand)]
+    command: AuthGithubSubcommand,
+}
+
+#[derive(Subcommand)]
+enum AuthGithubSubcommand {
+    Login(AuthGithubLoginArgs),
+    Logout,
+    Enroll(AuthGithubEnrollArgs),
+    Unenroll(AuthGithubUnenrollArgs),
+    List,
+}
+
+#[derive(Args)]
+struct AuthGithubLoginArgs {
+    #[arg(long)]
+    pat_file: String,
+    #[arg(long, default_value = "fort-api")]
+    aud: String,
+    #[arg(long, default_value = "")]
+    access_ttl: String,
+    #[arg(long, default_value = "")]
+    refresh_ttl: String,
+}
+
+#[derive(Args)]
+struct AuthGithubEnrollArgs {
+    #[arg(long)]
+    agent: String,
+    #[arg(long)]
+    pat_file: String,
+}
+
+#[derive(Args)]
+struct AuthGithubUnenrollArgs {
+    #[arg(long)]
+    agent: String,
 }
 
 #[derive(Args)]
@@ -655,6 +697,7 @@ impl Client {
                 }
             }
             AuthSubcommand::Session(command) => self.cmd_auth_session(command.command),
+            AuthSubcommand::Github(command) => self.cmd_auth_github(command.command),
         }
     }
 
@@ -1218,6 +1261,166 @@ impl Client {
                 )?;
                 ensure_status(status, 200, &response)?;
                 print_json(&response)
+            }
+        }
+    }
+
+    fn cmd_auth_github(&self, command: AuthGithubSubcommand) -> Result<()> {
+        match command {
+            AuthGithubSubcommand::Login(args) => {
+                require_pat_tls(&self.host)?;
+                let pat = read_secret_file(&args.pat_file).context("read --pat-file")?;
+                let mut body = json!({ "pat": pat, "aud": args.aud.trim() });
+                if !args.access_ttl.trim().is_empty() {
+                    body["access_ttl"] = json!(args.access_ttl.trim());
+                }
+                if !args.refresh_ttl.trim().is_empty() {
+                    body["refresh_ttl"] = json!(args.refresh_ttl.trim());
+                }
+                let (status, response) = self.api_request(
+                    Method::POST,
+                    "/v1/auth/github/login",
+                    Some(body),
+                    false,
+                )?;
+                ensure_status(status, 200, &response)?;
+                let access_token = response["access_token"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string();
+                let refresh_token = response["refresh_token"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string();
+                if access_token.trim().is_empty() || refresh_token.trim().is_empty() {
+                    bail!("github login response missing tokens");
+                }
+                let session_dir =
+                    fort_session_dir().context("resolve fort session directory")?;
+                let access_path = session_dir.join("access.token").display().to_string();
+                let refresh_path = session_dir.join("refresh.token").display().to_string();
+                write_secret_file(&access_path, &access_token)?;
+                write_secret_file(&refresh_path, &refresh_token)?;
+                let summary = json!({
+                    "session_id": response["session_id"].as_str().unwrap_or_default(),
+                    "agent_id": response["agent_id"].as_str().unwrap_or_default(),
+                    "github_login": response["github_login"].as_str().unwrap_or_default(),
+                    "access_token_file": access_path,
+                    "refresh_token_file": refresh_path,
+                    "access_expires_at": response["access_expires_at"].as_str().unwrap_or_default(),
+                    "refresh_expires_at": response["refresh_expires_at"].as_str().unwrap_or_default(),
+                });
+                if self.json {
+                    print_json(&summary)
+                } else {
+                    println!(
+                        "logged in as {} (github {})",
+                        response["agent_id"].as_str().unwrap_or_default(),
+                        response["github_login"].as_str().unwrap_or_default()
+                    );
+                    println!("access_token_file={access_path}");
+                    println!("refresh_token_file={refresh_path}");
+                    Ok(())
+                }
+            }
+            AuthGithubSubcommand::Logout => {
+                let refresh_path = managed_refresh_token_path()
+                    .context("resolve fort session directory")?;
+                if !Path::new(&refresh_path).exists() {
+                    bail!("no managed session to close");
+                }
+                let refresh_token =
+                    read_secret_file(&refresh_path).context("read managed refresh token")?;
+                let (status, response) = self.api_request(
+                    Method::POST,
+                    "/v1/auth/session/close",
+                    Some(json!({ "refresh_token": refresh_token })),
+                    false,
+                )?;
+                ensure_status(status, 200, &response)?;
+                let access_path =
+                    managed_access_token_path().context("resolve fort session directory")?;
+                let _ = fs::remove_file(&access_path);
+                let _ = fs::remove_file(&refresh_path);
+                if self.json {
+                    print_json(&response)
+                } else {
+                    println!(
+                        "logged out; closed session {}",
+                        response["session_id"].as_str().unwrap_or_default()
+                    );
+                    Ok(())
+                }
+            }
+            AuthGithubSubcommand::Enroll(args) => {
+                self.require_admin_token()?;
+                require_pat_tls(&self.host)?;
+                let pat = read_secret_file(&args.pat_file).context("read --pat-file")?;
+                let (status, response) = self.api_request(
+                    Method::POST,
+                    "/v1/auth/github/enroll",
+                    Some(json!({ "agent_id": args.agent.trim(), "pat": pat })),
+                    true,
+                )?;
+                ensure_status(status, 200, &response)?;
+                if self.json {
+                    print_json(&response)
+                } else {
+                    println!(
+                        "enrolled {} (github {}, fingerprint {})",
+                        response["agent_id"].as_str().unwrap_or_default(),
+                        response["github_login"].as_str().unwrap_or_default(),
+                        response["fingerprint_prefix"].as_str().unwrap_or_default()
+                    );
+                    Ok(())
+                }
+            }
+            AuthGithubSubcommand::Unenroll(args) => {
+                self.require_admin_token()?;
+                let (status, response) = self.api_request(
+                    Method::DELETE,
+                    &format!(
+                        "/v1/auth/github/fingerprints/{}",
+                        encode_path_segment(args.agent.trim())
+                    ),
+                    None,
+                    true,
+                )?;
+                ensure_status(status, 200, &response)?;
+                if self.json {
+                    print_json(&response)
+                } else {
+                    println!("unenrolled {}", args.agent.trim());
+                    Ok(())
+                }
+            }
+            AuthGithubSubcommand::List => {
+                self.require_admin_token()?;
+                let (status, response) = self.api_request(
+                    Method::GET,
+                    "/v1/auth/github/fingerprints",
+                    None,
+                    true,
+                )?;
+                ensure_status(status, 200, &response)?;
+                if self.json {
+                    print_json(&response)
+                } else {
+                    let entries = response["fingerprints"].as_array().cloned().unwrap_or_default();
+                    if entries.is_empty() {
+                        println!("no enrolled fingerprints");
+                    }
+                    for entry in entries {
+                        println!(
+                            "{} github={} fingerprint={} enrolled={}",
+                            entry["agent_id"].as_str().unwrap_or_default(),
+                            entry["github_login"].as_str().unwrap_or_default(),
+                            entry["fingerprint_prefix"].as_str().unwrap_or_default(),
+                            entry["created_at"].as_str().unwrap_or_default()
+                        );
+                    }
+                    Ok(())
+                }
             }
         }
     }
@@ -1857,6 +2060,19 @@ fn normalize_path_components(path: PathBuf) -> PathBuf {
         }
     }
     normalized
+}
+
+/// GitHub PATs are bearer credentials: refuse to send one over plaintext HTTP
+/// except to loopback hosts (isolated integration tests).
+fn require_pat_tls(host: &str) -> Result<()> {
+    let url = Url::parse(host.trim()).context("invalid host")?;
+    if url.scheme() == "https" {
+        return Ok(());
+    }
+    match url.host_str().unwrap_or("").trim() {
+        "localhost" | "127.0.0.1" | "::1" => Ok(()),
+        _ => bail!("refusing to send a GitHub PAT over non-TLS host {host}; use https"),
+    }
 }
 
 fn reject_deprecated_token_value_env() -> Result<()> {

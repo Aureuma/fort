@@ -125,6 +125,15 @@ pub struct RefreshSession {
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct PatFingerprint {
+    pub fingerprint: String,
+    pub agent_id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub github_login: String,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct RunSession {
     pub id: String,
     pub agent_id: String,

@@ -42,7 +42,7 @@ fn run() -> anyhow::Result<()> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
     {
-        let agent_id = format!("si-worker-{profile_id}");
+        let agent_id = format!("fort-worker-{profile_id}");
         let workload = store.create_agent(
             &agent_id,
             Some(fort::model::AgentType::Workload),

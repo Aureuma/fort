@@ -2057,3 +2057,337 @@ fn set_0600(path: &PathBuf) {
         fs::set_permissions(path, perms).expect("chmod");
     }
 }
+
+#[test]
+fn fort_github_pat_login_roundtrip_through_mock_github() {
+    let temp = TempDir::new().expect("tempdir");
+    let state_dir = temp.path().join("state");
+    let safe_root = temp.path().join("safe");
+    let safe_repo = safe_root.join("safe");
+    fs::create_dir_all(&state_dir).expect("mkdir state");
+    fs::create_dir_all(&safe_repo).expect("mkdir safe");
+
+    let state_path = state_dir.join("state.json");
+    let keyring_path = state_dir.join("vault-keyring.json");
+    let signing_key_path = state_dir.join("jwt-signing.key");
+    let pepper_path = state_dir.join("github-pepper");
+    let config_path = state_dir.join("fortd.toml");
+    let admin_token_path = state_dir.join("admin.token");
+    let pat_path = state_dir.join("machine.pat");
+    let bad_pat_path = state_dir.join("bad.pat");
+    let session_dir = temp.path().join("session");
+    let bad_session_dir = temp.path().join("bad-session");
+
+    let admin_token = seed_state(&state_path, &keyring_path, &signing_key_path);
+    fs::write(&admin_token_path, admin_token.as_bytes()).expect("write admin token");
+    set_0600(&admin_token_path);
+    fs::write(&pepper_path, "test-pepper-that-is-long-enough-32").expect("write pepper");
+    set_0600(&pepper_path);
+    fs::write(&pat_path, "valid-test-pat\n").expect("write pat");
+    set_0600(&pat_path);
+    fs::write(&bad_pat_path, "wrong-pat\n").expect("write bad pat");
+    set_0600(&bad_pat_path);
+
+    // enroll + login + bad-pat login + post-unenroll login = 4 GitHub calls.
+    let (github_base, github_handle) = start_mock_github_user_api(4);
+
+    let addr = free_addr();
+    let fortd = std::env::var("CARGO_BIN_EXE_fortd").expect("fortd path");
+    let fort = std::env::var("CARGO_BIN_EXE_fort").expect("fort path");
+    let host = format!("http://{addr}");
+    fs::write(
+        &config_path,
+        format!(
+            "addr = \"{addr}\"\nstate_path = \"{}\"\njwt_signing_key_file = \"{}\"\nsafe_root = \"{}\"\nvault_keyring_file = \"{}\"\ntoken_ttl = \"15m\"\nrefresh_session_ttl = \"30d\"\nrun_ttl = \"60s\"\nsecret_ttl = \"120s\"\ngithub_pepper_file = \"{}\"\ngithub_api_base = \"{}\"\n",
+            state_path.display(),
+            signing_key_path.display(),
+            safe_root.display(),
+            keyring_path.display(),
+            pepper_path.display(),
+            github_base,
+        ),
+    )
+    .expect("write fortd config");
+
+    let mut child = Command::new(&fortd)
+        .args(["--config-file", config_path.to_str().expect("config path")])
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .expect("spawn fortd");
+    wait_for(Duration::from_secs(10), || {
+        Command::new(&fort)
+            .args([
+                "--host",
+                &host,
+                "--token-file",
+                admin_token_path.to_str().expect("admin token path"),
+                "doctor",
+            ])
+            .status()
+            .ok()
+            .is_some_and(|status| status.success())
+    });
+
+    let admin = admin_token_path.to_str().unwrap().to_string();
+    run_ok(
+        &fort,
+        &[
+            "--host", &host, "--token-file", &admin, "agent", "create", "--id",
+            "machine-test", "--type", "workload",
+        ],
+    );
+    run_ok(
+        &fort,
+        &[
+            "--host", &host, "--token-file", &admin, "agent", "policy", "set", "--id",
+            "machine-test", "--bind", "safe:dev:get,set,list,batch-get,run",
+        ],
+    );
+    let enroll_out = run_capture(
+        &fort,
+        &[
+            "--host",
+            &host,
+            "--token-file",
+            &admin,
+            "auth",
+            "github",
+            "enroll",
+            "--agent",
+            "machine-test",
+            "--pat-file",
+            pat_path.to_str().unwrap(),
+        ],
+    );
+    assert!(
+        enroll_out.contains("enrolled machine-test"),
+        "enroll output: {enroll_out}"
+    );
+    assert!(
+        !enroll_out.contains("valid-test-pat"),
+        "enroll must not echo the PAT: {enroll_out}"
+    );
+    let list_out = run_capture(
+        &fort,
+        &[
+            "--host", &host, "--token-file", &admin, "auth", "github", "list",
+        ],
+    );
+    assert!(
+        list_out.contains("machine-test") && list_out.contains("test-machine"),
+        "list output: {list_out}"
+    );
+
+    let login_out = run_capture_session(
+        &fort,
+        &[
+            "--host",
+            &host,
+            "auth",
+            "github",
+            "login",
+            "--pat-file",
+            pat_path.to_str().unwrap(),
+        ],
+        &session_dir,
+    );
+    assert!(
+        login_out.contains("logged in as machine-test"),
+        "login output: {login_out}"
+    );
+    assert!(
+        !login_out.contains("valid-test-pat"),
+        "login must not echo the PAT: {login_out}"
+    );
+    let managed_access = session_dir.join("access.token");
+    let managed_refresh = session_dir.join("refresh.token");
+    assert!(managed_access.exists(), "login must write access token");
+    assert!(managed_refresh.exists(), "login must write refresh token");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        for path in [&managed_access, &managed_refresh] {
+            assert_eq!(
+                fs::metadata(path)
+                    .expect("stat session file")
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600,
+                "session file must be 0600: {}",
+                path.display()
+            );
+        }
+    }
+
+    // The managed session works with no extra flags.
+    let whoami_out = run_capture_session(
+        &fort,
+        &["--host", &host, "auth", "whoami"],
+        &session_dir,
+    );
+    assert!(
+        whoami_out.contains("machine-test"),
+        "whoami output: {whoami_out}"
+    );
+    let secret_value_path = state_dir.join("pat-value");
+    fs::write(&secret_value_path, b"pat-secret\n").expect("write secret value");
+    set_0600(&secret_value_path);
+    run_ok_session(
+        &fort,
+        &[
+            "--host",
+            &host,
+            "set",
+            "--repo",
+            "safe",
+            "--env",
+            "dev",
+            "--key",
+            "PAT_KEY",
+            "--value-file",
+            secret_value_path.to_str().unwrap(),
+        ],
+        &session_dir,
+    );
+    let get_out = run_capture_session(
+        &fort,
+        &[
+            "--host", &host, "get", "--repo", "safe", "--env", "dev", "--key", "PAT_KEY",
+            "--format", "raw",
+        ],
+        &session_dir,
+    );
+    assert_eq!(get_out.trim(), "pat-secret");
+
+    // A wrong PAT is rejected without touching the session.
+    let bad_login = Command::new(&fort)
+        .args([
+            "--host",
+            &host,
+            "auth",
+            "github",
+            "login",
+            "--pat-file",
+            bad_pat_path.to_str().unwrap(),
+        ])
+        .env("FORT_SESSION_DIR", &bad_session_dir)
+        .output()
+        .expect("run bad login");
+    assert!(
+        !bad_login.status.success(),
+        "bad PAT login succeeded unexpectedly"
+    );
+    assert!(
+        String::from_utf8_lossy(&bad_login.stderr).contains("unauthorized"),
+        "bad login stderr: {}",
+        String::from_utf8_lossy(&bad_login.stderr)
+    );
+
+    // Logout closes the server session and removes local files.
+    run_ok_session(&fort, &["--host", &host, "auth", "github", "logout"], &session_dir);
+    assert!(!managed_access.exists(), "logout must remove access token");
+    assert!(!managed_refresh.exists(), "logout must remove refresh token");
+
+    // After unenroll, the previously valid PAT no longer logs in.
+    run_ok(
+        &fort,
+        &[
+            "--host", &host, "--token-file", &admin, "auth", "github", "unenroll", "--agent",
+            "machine-test",
+        ],
+    );
+    let logged_out_login = Command::new(&fort)
+        .args([
+            "--host",
+            &host,
+            "auth",
+            "github",
+            "login",
+            "--pat-file",
+            pat_path.to_str().unwrap(),
+        ])
+        .env("FORT_SESSION_DIR", &bad_session_dir)
+        .output()
+        .expect("run post-unenroll login");
+    assert!(
+        !logged_out_login.status.success(),
+        "post-unenroll login succeeded unexpectedly"
+    );
+
+    github_handle.join().expect("join mock github");
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+fn start_mock_github_user_api(expected_requests: usize) -> (String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock github");
+    let url = format!(
+        "http://{}",
+        listener.local_addr().expect("mock github addr")
+    );
+    let handle = thread::spawn(move || {
+        for _ in 0..expected_requests {
+            let (mut stream, _) = listener.accept().expect("accept mock github request");
+            let request = read_http_request(&mut stream);
+            assert!(
+                request.starts_with("GET /user "),
+                "unexpected github request: {request}"
+            );
+            // The request path is asserted above; matching the bare PAT is
+            // sufficient for this mock (only Fort knows the PAT).
+            let authorized = request.contains("valid-test-pat");
+            let (status, body) = if authorized {
+                ("200 OK", r#"{"login":"test-machine","id":42}"#)
+            } else {
+                ("401 Unauthorized", r#"{"message":"Bad credentials"}"#)
+            };
+            write!(
+                stream,
+                "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            )
+            .expect("write mock github response");
+        }
+    });
+    (url, handle)
+}
+
+fn run_ok_session(bin: &str, args: &[&str], session_dir: &PathBuf) {
+    let output = Command::new(bin)
+        .args(args)
+        .env("FORT_SESSION_DIR", session_dir)
+        .env_remove("FORT_TOKEN_PATH")
+        .env_remove("FORT_BOOTSTRAP_TOKEN_FILE")
+        .output()
+        .expect("run command");
+    assert!(
+        output.status.success(),
+        "command failed: {} {:?}\nstdout={}\nstderr={}",
+        bin,
+        args,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+fn run_capture_session(bin: &str, args: &[&str], session_dir: &PathBuf) -> String {
+    let output = Command::new(bin)
+        .args(args)
+        .env("FORT_SESSION_DIR", session_dir)
+        .env_remove("FORT_TOKEN_PATH")
+        .env_remove("FORT_BOOTSTRAP_TOKEN_FILE")
+        .output()
+        .expect("run command");
+    assert!(
+        output.status.success(),
+        "command failed: {} {:?}\nstdout={}\nstderr={}",
+        bin,
+        args,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).expect("stdout utf8")
+}

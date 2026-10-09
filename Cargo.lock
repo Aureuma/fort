@@ -601,7 +601,7 @@ dependencies = [
 
 [[package]]
 name = "fort"
-version = "1.0.1"
+version = "1.0.2"
 dependencies = [
  "anyhow",
  "axum",
@@ -612,6 +612,7 @@ dependencies = [
  "crypto_box",
  "ecies",
  "hex",
+ "hmac",
  "http",
  "jsonwebtoken",
  "libc",

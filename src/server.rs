@@ -1,12 +1,13 @@
-use std::net::SocketAddr;
-use std::sync::Arc;
-use std::time::Duration;
+use std::collections::HashMap;
+use std::net::{IpAddr, SocketAddr};
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result};
-use axum::extract::{Path, Query, State};
+use axum::extract::{ConnectInfo, Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::{Json, Router};
 use chrono::Utc;
 use rand::RngCore;
@@ -15,6 +16,7 @@ use serde_json::{Value, json};
 
 use crate::auth::{AuthError, Manager};
 use crate::config::Config;
+use crate::github_auth::{VerifyOutcome, fingerprint_pat, fingerprint_prefix, verify_pat};
 use crate::model::{AgentStatus, AgentType, AuditEvent, Binding, Operation, RunSession};
 use crate::store::{Store, StoreError};
 use crate::vaultbridge::{Backend, VaultError};
@@ -25,6 +27,49 @@ struct AppState {
     store: Arc<Store>,
     vault: Arc<Backend>,
     auth: Arc<Manager>,
+    login_throttle: LoginThrottle,
+}
+
+/// Minimal in-memory throttle for the public PAT login endpoint: at most
+/// `LOGIN_FAILURE_LIMIT` failures per `LOGIN_FAILURE_WINDOW` per source IP.
+/// Success clears the caller's failures.
+#[derive(Clone)]
+struct LoginThrottle {
+    inner: Arc<Mutex<HashMap<IpAddr, Vec<Instant>>>>,
+}
+
+const LOGIN_FAILURE_LIMIT: usize = 20;
+const LOGIN_FAILURE_WINDOW: Duration = Duration::from_secs(5 * 60);
+
+impl LoginThrottle {
+    fn new() -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    fn allowed(&self, ip: IpAddr) -> bool {
+        let mut guard = self.inner.lock().expect("throttle lock poisoned");
+        let now = Instant::now();
+        let entries = guard.entry(ip).or_default();
+        entries.retain(|at| now.duration_since(*at) < LOGIN_FAILURE_WINDOW);
+        entries.len() < LOGIN_FAILURE_LIMIT
+    }
+
+    fn note_failure(&self, ip: IpAddr) {
+        let mut guard = self.inner.lock().expect("throttle lock poisoned");
+        let now = Instant::now();
+        guard.entry(ip).or_default().push(now);
+        guard.retain(|_, failures| {
+            failures.retain(|at| now.duration_since(*at) < LOGIN_FAILURE_WINDOW);
+            !failures.is_empty()
+        });
+    }
+
+    fn note_success(&self, ip: IpAddr) {
+        let mut guard = self.inner.lock().expect("throttle lock poisoned");
+        guard.remove(&ip);
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -70,6 +115,7 @@ pub async fn run(config: Config, store: Arc<Store>) -> Result<()> {
         store,
         vault,
         auth,
+        login_throttle: LoginThrottle::new(),
     };
     let app = router(state);
     let addr = normalize_socket_addr(&config.addr)?;
@@ -77,10 +123,13 @@ pub async fn run(config: Config, store: Arc<Store>) -> Result<()> {
     let listener = tokio::net::TcpListener::bind(addr)
         .await
         .with_context(|| format!("bind {}", addr))?;
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await
-        .context("serve fortd")?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown_signal())
+    .await
+    .context("serve fortd")?;
     Ok(())
 }
 
@@ -95,6 +144,16 @@ fn router(state: AppState) -> Router {
             post(handle_auth_session_refresh),
         )
         .route("/v1/auth/session/close", post(handle_auth_session_close))
+        .route("/v1/auth/github/login", post(handle_github_login))
+        .route("/v1/auth/github/enroll", post(handle_github_enroll))
+        .route(
+            "/v1/auth/github/fingerprints",
+            get(handle_github_fingerprints),
+        )
+        .route(
+            "/v1/auth/github/fingerprints/{agent_id}",
+            delete(handle_github_unenroll),
+        )
         .route("/v1/auth/whoami", get(handle_auth_whoami))
         .route("/v1/auth/list", get(handle_auth_list))
         .route("/v1/auth/revoke", post(handle_auth_revoke))
@@ -522,6 +581,285 @@ async fn handle_auth_session_close(
         .close_refresh_session_by_id(&session_id)
         .map_err(|_| ApiError::new(StatusCode::UNAUTHORIZED, "unauthorized"))?;
     Ok(Json(json!({ "ok": true, "session_id": session_id })))
+}
+
+#[derive(Deserialize)]
+struct GithubLoginRequest {
+    pat: String,
+    #[serde(default, alias = "aud")]
+    audience: String,
+    #[serde(default)]
+    access_ttl: String,
+    access_ttl_seconds: Option<i64>,
+    #[serde(default)]
+    refresh_ttl: String,
+    refresh_ttl_seconds: Option<i64>,
+}
+
+async fn handle_github_login(
+    State(state): State<AppState>,
+    ConnectInfo(addr): ConnectInfo<SocketAddr>,
+    Json(request): Json<GithubLoginRequest>,
+) -> Result<Json<Value>, ApiError> {
+    if state.config.github_pepper.is_empty() {
+        return Err(ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "github auth is not configured",
+        ));
+    }
+    let ip = addr.ip();
+    if !state.login_throttle.allowed(ip) {
+        add_audit(
+            &state,
+            "",
+            "auth_github_login",
+            "",
+            "",
+            "",
+            "deny",
+            "rate_limited",
+        );
+        return Err(ApiError::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "too many login attempts",
+        ));
+    }
+    let pat = request.pat.trim().to_string();
+    if pat.is_empty() {
+        return Err(ApiError::new(StatusCode::BAD_REQUEST, "pat is required"));
+    }
+    let api_base = state.config.github_api_base.clone();
+    let outcome = tokio::task::spawn_blocking(move || verify_pat(&api_base, &pat))
+        .await
+        .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "login failed"))?;
+    let user = match outcome {
+        VerifyOutcome::Valid(user) => user,
+        VerifyOutcome::Invalid => {
+            state.login_throttle.note_failure(ip);
+            add_audit(
+                &state,
+                "",
+                "auth_github_login",
+                "",
+                "",
+                "",
+                "deny",
+                "invalid_pat",
+            );
+            return Err(ApiError::new(StatusCode::UNAUTHORIZED, "unauthorized"));
+        }
+        VerifyOutcome::Unavailable(detail) => {
+            add_audit(
+                &state,
+                "",
+                "auth_github_login",
+                "",
+                "",
+                "",
+                "deny",
+                "github_unavailable",
+            );
+            let _ = detail;
+            return Err(ApiError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "github verification unavailable",
+            ));
+        }
+    };
+    let fingerprint = fingerprint_pat(&state.config.github_pepper, &request.pat);
+    let entry = match state.store.get_pat_fingerprint(&fingerprint) {
+        Ok(entry) => entry,
+        Err(_) => {
+            state.login_throttle.note_failure(ip);
+            add_audit(
+                &state,
+                "",
+                "auth_github_login",
+                "",
+                "",
+                fingerprint_prefix(&fingerprint),
+                "deny",
+                "unknown_fingerprint",
+            );
+            return Err(ApiError::new(StatusCode::UNAUTHORIZED, "unauthorized"));
+        }
+    };
+    let agent = state
+        .store
+        .get_agent(&entry.agent_id)
+        .map_err(|_| ApiError::new(StatusCode::UNAUTHORIZED, "unauthorized"))?;
+    if agent.status != AgentStatus::Active {
+        state.login_throttle.note_failure(ip);
+        return Err(ApiError::new(StatusCode::UNAUTHORIZED, "unauthorized"));
+    }
+    let access_ttl = parse_ttl(
+        Some(&request.access_ttl),
+        request.access_ttl_seconds,
+        state.config.token_ttl,
+    )?;
+    let refresh_ttl = parse_ttl(
+        Some(&request.refresh_ttl),
+        request.refresh_ttl_seconds,
+        state.config.refresh_session_ttl,
+    )?;
+    let audience = if request.audience.trim().is_empty() {
+        "fort-api"
+    } else {
+        request.audience.trim()
+    };
+    let (access_token, record, session, refresh_token) = state
+        .auth
+        .open_refresh_session(&agent, access_ttl, refresh_ttl, audience)
+        .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "login failed"))?;
+    state.login_throttle.note_success(ip);
+    add_audit(
+        &state,
+        &record.agent_id,
+        "auth_github_login",
+        "",
+        "",
+        fingerprint_prefix(&fingerprint),
+        "allow",
+        &user.login,
+    );
+    Ok(Json(json!({
+        "session_id": session.id,
+        "agent_id": record.agent_id,
+        "aud": record.audience,
+        "token_type": "Bearer",
+        "access_token": access_token,
+        "access_jti": record.jti,
+        "access_issued_at": record.issued_at,
+        "access_expires_at": record.expires_at,
+        "refresh_token": refresh_token,
+        "refresh_expires_at": session.refresh_expires_at,
+        "github_login": user.login,
+    })))
+}
+
+#[derive(Deserialize)]
+struct GithubEnrollRequest {
+    agent_id: String,
+    pat: String,
+}
+
+async fn handle_github_enroll(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<GithubEnrollRequest>,
+) -> Result<Json<Value>, ApiError> {
+    let _ = require_admin(&headers, &state)?;
+    if state.config.github_pepper.is_empty() {
+        return Err(ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "github auth is not configured",
+        ));
+    }
+    let agent_id = request.agent_id.trim();
+    if agent_id.is_empty() {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "agent_id is required",
+        ));
+    }
+    let agent = state
+        .store
+        .get_agent(agent_id)
+        .map_err(|_| ApiError::new(StatusCode::NOT_FOUND, "agent not found"))?;
+    if agent.status != AgentStatus::Active {
+        return Err(ApiError::new(StatusCode::FORBIDDEN, "agent is disabled"));
+    }
+    let pat = request.pat.trim().to_string();
+    if pat.is_empty() {
+        return Err(ApiError::new(StatusCode::BAD_REQUEST, "pat is required"));
+    }
+    let api_base = state.config.github_api_base.clone();
+    let outcome = tokio::task::spawn_blocking(move || verify_pat(&api_base, &pat))
+        .await
+        .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "enroll failed"))?;
+    let user = match outcome {
+        VerifyOutcome::Valid(user) => user,
+        VerifyOutcome::Invalid => {
+            return Err(ApiError::new(StatusCode::BAD_REQUEST, "pat is invalid"));
+        }
+        VerifyOutcome::Unavailable(_) => {
+            return Err(ApiError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "github verification unavailable",
+            ));
+        }
+    };
+    let fingerprint = fingerprint_pat(&state.config.github_pepper, &request.pat);
+    let entry = state
+        .store
+        .put_pat_fingerprint(&fingerprint, agent_id, &user.login, Utc::now())
+        .map_err(|error| match error {
+            StoreError::Conflict => ApiError::new(
+                StatusCode::CONFLICT,
+                "fingerprint is already enrolled for another agent",
+            ),
+            _ => ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "enroll failed"),
+        })?;
+    add_audit(
+        &state,
+        agent_id,
+        "auth_github_enroll",
+        "",
+        "",
+        fingerprint_prefix(&fingerprint),
+        "allow",
+        &user.login,
+    );
+    Ok(Json(json!({
+        "agent_id": entry.agent_id,
+        "github_login": entry.github_login,
+        "fingerprint_prefix": fingerprint_prefix(&entry.fingerprint),
+        "created_at": entry.created_at,
+    })))
+}
+
+async fn handle_github_fingerprints(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Result<Json<Value>, ApiError> {
+    let _ = require_admin(&headers, &state)?;
+    let entries: Vec<Value> = state
+        .store
+        .list_pat_fingerprints()
+        .iter()
+        .map(|entry| {
+            json!({
+                "agent_id": entry.agent_id,
+                "github_login": entry.github_login,
+                "fingerprint_prefix": fingerprint_prefix(&entry.fingerprint),
+                "created_at": entry.created_at,
+            })
+        })
+        .collect();
+    Ok(Json(json!({ "fingerprints": entries })))
+}
+
+async fn handle_github_unenroll(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(agent_id): Path<String>,
+) -> Result<Json<Value>, ApiError> {
+    let _ = require_admin(&headers, &state)?;
+    let removed = state
+        .store
+        .remove_pat_fingerprints_for_agent(agent_id.trim())
+        .map_err(|_| ApiError::new(StatusCode::NOT_FOUND, "no fingerprint enrolled"))?;
+    add_audit(
+        &state,
+        agent_id.trim(),
+        "auth_github_unenroll",
+        "",
+        "",
+        "",
+        "allow",
+        "",
+    );
+    Ok(Json(json!({ "ok": true, "removed": removed })))
 }
 
 async fn handle_auth_whoami(

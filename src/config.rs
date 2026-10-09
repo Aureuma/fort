@@ -25,6 +25,9 @@ pub struct Config {
     pub refresh_session_ttl: Duration,
     pub run_ttl: Duration,
     pub secret_ttl: Duration,
+    pub github_pepper_file: Option<String>,
+    pub github_pepper: Vec<u8>,
+    pub github_api_base: String,
 }
 
 impl Config {
@@ -47,6 +50,8 @@ impl Config {
             }
             _ => {}
         }
+        let (github_pepper_file, github_pepper) =
+            load_optional_pepper(&env_trim("FORT_GITHUB_PEPPER_FILE"))?;
         Ok(Self {
             addr: env_or("FORT_ADDR", ":8088"),
             state_path: env_or("FORT_STATE_PATH", "./fort-state.json"),
@@ -62,6 +67,12 @@ impl Config {
             ),
             run_ttl: parse_duration_env("FORT_RUN_TTL", DEFAULT_RUN_TTL),
             secret_ttl: parse_duration_env("FORT_SECRET_TTL", DEFAULT_SECRET_TTL),
+            github_pepper_file,
+            github_pepper,
+            github_api_base: env_or(
+                "FORT_GITHUB_API_BASE",
+                crate::github_auth::DEFAULT_GITHUB_API_BASE,
+            ),
         })
     }
 
@@ -84,6 +95,8 @@ impl Config {
             }
             _ => {}
         }
+        let (github_pepper_file, github_pepper) =
+            load_optional_pepper(&parsed.github_pepper_file)?;
         Ok(Self {
             addr: normalize_value(parsed.addr, ":8088"),
             state_path: normalize_value(parsed.state_path, "./fort-state.json"),
@@ -104,6 +117,12 @@ impl Config {
             ),
             run_ttl: parse_duration_value(parsed.run_ttl.as_deref(), DEFAULT_RUN_TTL),
             secret_ttl: parse_duration_value(parsed.secret_ttl.as_deref(), DEFAULT_SECRET_TTL),
+            github_pepper_file,
+            github_pepper,
+            github_api_base: normalize_value(
+                parsed.github_api_base,
+                crate::github_auth::DEFAULT_GITHUB_API_BASE,
+            ),
         })
     }
 }
@@ -130,6 +149,10 @@ struct FileConfig {
     run_ttl: Option<String>,
     #[serde(default)]
     secret_ttl: Option<String>,
+    #[serde(default)]
+    github_pepper_file: String,
+    #[serde(default)]
+    github_api_base: String,
 }
 
 pub fn env_trim(name: &str) -> String {
@@ -182,6 +205,18 @@ pub fn read_secret_file(path: &str) -> Result<String> {
         bail!("secret file is empty");
     }
     Ok(value)
+}
+
+fn load_optional_pepper(path: &str) -> Result<(Option<String>, Vec<u8>)> {
+    let path = path.trim();
+    if path.is_empty() {
+        return Ok((None, Vec::new()));
+    }
+    let pepper = read_secret_file(path)?;
+    if pepper.len() < 32 {
+        bail!("GitHub pepper must be at least 32 characters");
+    }
+    Ok((Some(path.to_string()), pepper.into_bytes()))
 }
 
 pub fn ensure_strict_secret_file(path: &Path) -> Result<()> {
