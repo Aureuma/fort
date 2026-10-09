@@ -28,7 +28,7 @@ Fort does not:
 - Workloads authenticate with short-lived access tokens and rotating refresh sessions.
 - Refresh and signing secrets are file-backed and strict-permissioned (`0600`), never env-injected secret values.
 - Vault ciphertext files (`safe/<repo>/.env.<env>`) must be regular files with `0600` (or stricter).
-- Vault keyring material is file-backed JSON state (`~/.si/vault/vault-keyring.json` by default), not OS keychain storage.
+- Vault keyring material is file-backed JSON state (`~/.vault/keyring.json` by default), not OS keychain storage.
 - Provisioning is explicit and authenticated; there is no hidden bootstrap bypass path.
 
 ## Auth & Session Security
@@ -65,7 +65,7 @@ addr = "127.0.0.1:8088"
 state_path = "$PWD/.artifacts/local/fort-state.json"
 jwt_signing_key_file = "$PWD/.artifacts/local/fort-jwt-signing.key"
 safe_root = "/home/shawn/Development/safe"
-vault_keyring_file = "$HOME/.si/vault/vault-keyring.json"
+vault_keyring_file = "$HOME/.vault/keyring.json"
 token_ttl = "15m"
 refresh_session_ttl = "30d"
 run_ttl = "60s"
@@ -153,6 +153,7 @@ CLI token sources:
 1. `--token-file`
 2. `FORT_TOKEN_PATH`
 3. `FORT_BOOTSTRAP_TOKEN_FILE`
+4. managed Codex runtime session at `$CODEX_HOME/fort/access.token` (last resort)
 
 Use `FORT_TOKEN_PATH` only for managed runtime environments. SI-managed Codex runtime auth is owned by `si codex spawn` / `si codex shell`, which pass explicit token files to native `fort`.
 
@@ -160,15 +161,17 @@ Deprecated token-value env vars are disallowed:
 - `FORT_TOKEN`
 - `FORT_REFRESH_TOKEN`
 
-For SI runtime workers, prefer the `si fort ...` wrapper path:
-- SI reads the managed Codex profile session under `CODEX_HOME/fort/`
-- SI refreshes as needed
-- SI keeps auth file-based (no bearer token argv flow)
-
-When invoking `fort` flags through the SI wrapper, pass native `fort` flags after `--`:
+For managed runtime workers, native `fort` subsumes the retired `si fort`
+wrapper path: when no explicit token source is configured and
+`$CODEX_HOME/fort/refresh.token` exists, `fort` refreshes the managed session
+as needed. A missing or near-expiry access token is bootstrapped from the
+refresh token, the new access token is written to
+`$CODEX_HOME/fort/access.token`, and the refresh token is rotated in place.
+Explicit token sources always win and never trigger a managed refresh. Auth
+stays file-based (no bearer token argv flow), so plain commands work directly:
 
 ```bash
-si fort -- --host https://fort.aureuma.ai doctor
+fort --host https://fort.aureuma.ai doctor
 ```
 
 ## Refresh Token Handling (File-Only)

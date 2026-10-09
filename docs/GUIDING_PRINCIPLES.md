@@ -23,7 +23,7 @@ Fort is not a secret database. It must remain a thin API wrapper over Vault-back
 - Required file mode is `0600` (or stricter).
 - Vault ciphertext files (`safe/<repo>/.env.<env>`) are required to be regular files with `0600` (or stricter).
 - Vault keyring entries must converge on one canonical keypair across all `repo/env` scopes.
-- Vault keyring material is file-backed JSON state (default `~/.si/vault/vault-keyring.json`), not OS keychain storage.
+- Vault keyring material is file-backed JSON state (default `~/.vault/keyring.json`), not OS keychain storage.
 - Refresh tokens are not passed via environment variables.
 - Secret scope reads fail fast when `.env.<env>` or keyring scope material is missing.
 
@@ -57,11 +57,11 @@ Fort is not a secret database. It must remain a thin API wrapper over Vault-back
 - `backup_private_keys` sprawl is disallowed.
 
 ### Runtime Access Model
-- Runtime workers access secrets through `si fort ...`.
+- Runtime workers access secrets through native `fort ...` with managed `$CODEX_HOME/fort/` sessions.
 - Direct local `vault` secret commands are blocked in SI runtime workers.
 - Host/admin operations may use `vault` for local maintenance workflows.
-- SI wrapper bootstrap/admin auth resolves from `FORT_BOOTSTRAP_TOKEN_FILE`.
-- SI runtime sessions resolve from the managed Codex profile session under `CODEX_HOME/fort/`; `FORT_TOKEN_PATH` and `FORT_REFRESH_TOKEN_PATH` are internal runtime env values, not general operator fallbacks.
+- Bootstrap/admin auth resolves from `FORT_BOOTSTRAP_TOKEN_FILE`.
+- Runtime sessions resolve from the managed Codex profile session under `CODEX_HOME/fort/`; `FORT_TOKEN_PATH` and `FORT_REFRESH_TOKEN_PATH` are internal runtime env values, not general operator fallbacks.
 
 ### Token & Session Security
 - Access tokens are short-lived JWT bearer tokens.
@@ -69,11 +69,10 @@ Fort is not a secret database. It must remain a thin API wrapper over Vault-back
 - Normal operator refresh sessions are bounded and default to 30 days unless explicitly shortened for a workload.
 - Single active refresh session per agent.
 - Refresh and signing secrets are file-backed only (`0600`), not env-injected secret values.
-- For `si fort` wrapper calls, native `fort` flags should be passed after `--`.
 
 ### File/Permission Invariants
 - `safe/<repo>/.env.<env>`: regular file, `0600` or stricter.
-- `~/.si/vault/vault-keyring.json`: `0600`.
+- `~/.vault/keyring.json`: `0600`.
 - `~/.vault/keys/age.key` (if file backend): `0600`.
 - Fort refresh token and signing key files: `0600`.
 

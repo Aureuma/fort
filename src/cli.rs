@@ -8,7 +8,10 @@ use std::process::Command;
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow, bail};
-use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
+use base64::{
+    Engine as _,
+    engine::general_purpose::{STANDARD as BASE64, URL_SAFE_NO_PAD},
+};
 use blake2::{
     Blake2bVar,
     digest::{Update, VariableOutput},
@@ -402,15 +405,30 @@ struct AgentPolicyCheckArgs {
 }
 
 pub fn run() -> Result<()> {
+    crate::sigpipe::restore_default();
     reject_deprecated_token_value_env()?;
     let cli = FortCli::parse();
-    let client = Client::new(cli.host, cli.token_file, cli.json)?;
+    if matches!(cli.command, FortCommand::Version) {
+        return cmd_version(cli.json);
+    }
+    let mut client = Client::new(cli.host, cli.token_file, cli.json)?;
+    client.ensure_fresh_managed_token()?;
     client.run(cli.command)
+}
+
+fn cmd_version(json: bool) -> Result<()> {
+    if json {
+        print_json(&json!({ "version": env!("CARGO_PKG_VERSION") }))
+    } else {
+        println!("{}", env!("CARGO_PKG_VERSION"));
+        Ok(())
+    }
 }
 
 struct Client {
     host: String,
     token: String,
+    managed: bool,
     json: bool,
     http: HttpClient,
 }
@@ -418,10 +436,11 @@ struct Client {
 impl Client {
     fn new(host: Option<String>, token_file: Option<String>, json: bool) -> Result<Self> {
         let host = resolve_host(host)?;
-        let token = resolve_token(token_file)?;
+        let resolved = resolve_token(token_file)?;
         Ok(Self {
             host,
-            token,
+            token: resolved.token,
+            managed: resolved.managed,
             json,
             http: HttpClient::builder()
                 .timeout(Duration::from_secs(15))
@@ -430,9 +449,54 @@ impl Client {
         })
     }
 
+    /// Managed Codex session support (the `si fort` wrapper behavior): when no
+    /// explicit token source is in play and a `$CODEX_HOME/fort/refresh.token`
+    /// session exists, bootstrap or refresh the access token in place so plain
+    /// `fort get ...` works inside managed runtimes with no extra flags.
+    fn ensure_fresh_managed_token(&mut self) -> Result<()> {
+        if !self.token.trim().is_empty() && !self.managed {
+            return Ok(());
+        }
+        let Some(refresh_path) = managed_refresh_token_path() else {
+            return Ok(());
+        };
+        if !Path::new(&refresh_path).exists() {
+            return Ok(());
+        }
+        if !self.token.trim().is_empty() && !token_needs_refresh(&self.token) {
+            return Ok(());
+        }
+        let refresh_token =
+            read_secret_file(&refresh_path).context("read managed refresh token")?;
+        let (status, response) = self.api_request(
+            Method::POST,
+            "/v1/auth/session/refresh",
+            Some(json!({ "refresh_token": refresh_token })),
+            false,
+        )?;
+        ensure_status(status, 200, &response).context("refresh managed Codex session")?;
+        let access_token = response["access_token"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        let next_refresh_token = response["refresh_token"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string();
+        if access_token.trim().is_empty() || next_refresh_token.trim().is_empty() {
+            bail!("managed session refresh response missing tokens");
+        }
+        let access_path = managed_access_token_path().unwrap_or_default();
+        write_secret_file(&access_path, &access_token)?;
+        write_secret_file(&refresh_path, &next_refresh_token)?;
+        self.token = access_token;
+        self.managed = true;
+        Ok(())
+    }
+
     fn run(&self, command: FortCommand) -> Result<()> {
         match command {
-            FortCommand::Version => self.cmd_version(),
+            FortCommand::Version => cmd_version(self.json),
             FortCommand::Doctor => self.cmd_doctor(),
             FortCommand::Auth(command) => self.cmd_auth(command.command),
             FortCommand::Get(args) => self.cmd_get(args),
@@ -468,15 +532,6 @@ impl Client {
         let status = response.status().as_u16();
         let json = response.json::<Value>().unwrap_or_else(|_| json!({}));
         Ok((status, json))
-    }
-
-    fn cmd_version(&self) -> Result<()> {
-        if self.json {
-            print_json(&json!({ "version": env!("CARGO_PKG_VERSION") }))
-        } else {
-            println!("{}", env!("CARGO_PKG_VERSION"));
-            Ok(())
-        }
     }
 
     fn cmd_doctor(&self) -> Result<()> {
@@ -1676,9 +1731,17 @@ fn resolve_host(flag_host: Option<String>) -> Result<String> {
     Ok(parsed.to_string().trim_end_matches('/').to_string())
 }
 
-fn resolve_token(flag_token_file: Option<String>) -> Result<String> {
+struct ResolvedToken {
+    token: String,
+    managed: bool,
+}
+
+fn resolve_token(flag_token_file: Option<String>) -> Result<ResolvedToken> {
     if let Some(path) = flag_token_file {
-        return read_secret_file(&path);
+        return Ok(ResolvedToken {
+            token: read_secret_file(&path)?,
+            managed: false,
+        });
     }
     for path in [
         env::var("FORT_TOKEN_PATH").unwrap_or_default(),
@@ -1688,10 +1751,60 @@ fn resolve_token(flag_token_file: Option<String>) -> Result<String> {
             continue;
         }
         if let Ok(token) = read_secret_file(&path) {
-            return Ok(token);
+            return Ok(ResolvedToken {
+                token,
+                managed: false,
+            });
         }
     }
-    Ok(String::new())
+    if let Some(path) = managed_access_token_path()
+        && let Ok(token) = read_secret_file(&path)
+    {
+        return Ok(ResolvedToken {
+            token,
+            managed: true,
+        });
+    }
+    Ok(ResolvedToken {
+        token: String::new(),
+        managed: false,
+    })
+}
+
+fn codex_fort_dir() -> Option<PathBuf> {
+    let home = env::var("CODEX_HOME").ok()?;
+    if home.trim().is_empty() {
+        return None;
+    }
+    Some(PathBuf::from(home.trim()).join("fort"))
+}
+
+fn managed_access_token_path() -> Option<String> {
+    codex_fort_dir().map(|dir| dir.join("access.token").display().to_string())
+}
+
+fn managed_refresh_token_path() -> Option<String> {
+    codex_fort_dir().map(|dir| dir.join("refresh.token").display().to_string())
+}
+
+const MANAGED_REFRESH_SKEW_SECONDS: i64 = 30;
+
+fn token_needs_refresh(token: &str) -> bool {
+    let Some(exp) = jwt_exp(token) else {
+        return true;
+    };
+    exp <= Utc::now().timestamp() + MANAGED_REFRESH_SKEW_SECONDS
+}
+
+fn jwt_exp(token: &str) -> Option<i64> {
+    let mut parts = token.trim().split('.');
+    let (header, payload, signature) = (parts.next()?, parts.next()?, parts.next()?);
+    if parts.next().is_some() || header.is_empty() || payload.is_empty() || signature.is_empty() {
+        return None;
+    }
+    let decoded = URL_SAFE_NO_PAD.decode(payload).ok()?;
+    let value: Value = serde_json::from_slice(&decoded).ok()?;
+    value.get("exp")?.as_i64()
 }
 
 fn guard_codex_profile_refresh_token_rotation(
@@ -2311,6 +2424,30 @@ mod tests {
         let parsed = GitHubRepoRef::parse("owner/repo").expect("valid repo");
         assert_eq!(parsed.owner, "owner");
         assert_eq!(parsed.name, "repo");
+    }
+
+    #[test]
+    fn managed_token_refresh_decision_follows_jwt_expiry() {
+        let now = Utc::now().timestamp();
+        assert!(token_needs_refresh(&test_jwt(Some(now - 60))));
+        assert!(token_needs_refresh(&test_jwt(Some(now + 10))));
+        assert!(!token_needs_refresh(&test_jwt(Some(now + 3600))));
+    }
+
+    #[test]
+    fn managed_token_refresh_decision_refreshes_unparseable_tokens() {
+        assert!(token_needs_refresh(&test_jwt(None)));
+        for bad in ["", "invalid-token", "a.b", "a.b.c.d", "...", " . . "] {
+            assert!(token_needs_refresh(bad), "{bad:?} must trigger refresh");
+        }
+    }
+
+    fn test_jwt(exp: Option<i64>) -> String {
+        let payload = match exp {
+            Some(exp) => format!(r#"{{"exp":{exp}}}"#),
+            None => r#"{"sub":"test"}"#.to_string(),
+        };
+        format!("h.{}.s", URL_SAFE_NO_PAD.encode(payload))
     }
 
     fn npm_args() -> NpmRotateArgs {

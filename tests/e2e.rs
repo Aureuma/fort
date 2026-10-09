@@ -1265,6 +1265,538 @@ fn fort_cli_rejects_codex_profile_refresh_token_rotation_to_detached_path() {
     assert!(stderr.contains("refreshed in place"));
 }
 
+#[test]
+fn fort_version_reports_without_host() {
+    let fort = std::env::var("CARGO_BIN_EXE_fort").expect("fort path");
+    let missing_settings = std::env::temp_dir().join("fort-missing-settings.toml");
+    let _ = fs::remove_file(&missing_settings);
+    let output = Command::new(fort)
+        .arg("version")
+        .env_remove("FORT_HOST")
+        .env("FORT_SETTINGS_FILE", &missing_settings)
+        .env_remove("FORT_TOKEN_PATH")
+        .env_remove("FORT_BOOTSTRAP_TOKEN_FILE")
+        .output()
+        .expect("run fort version");
+    assert!(
+        output.status.success(),
+        "fort version failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        env!("CARGO_PKG_VERSION")
+    );
+}
+
+#[test]
+fn fort_breakglass_issues_single_active_admin_token() {
+    let temp = TempDir::new().expect("tempdir");
+    let state_dir = temp.path().join("state");
+    let safe_root = temp.path().join("safe");
+    let safe_repo = safe_root.join("safe");
+    fs::create_dir_all(&state_dir).expect("mkdir state");
+    fs::create_dir_all(&safe_repo).expect("mkdir safe");
+
+    let state_path = state_dir.join("state.json");
+    let keyring_path = state_dir.join("vault-keyring.json");
+    let signing_key_path = state_dir.join("jwt-signing.key");
+    let config_path = state_dir.join("fortd.toml");
+    let admin_token_path = state_dir.join("admin.token");
+    let first_token_path = state_dir.join("breakglass-1.token");
+    let second_token_path = state_dir.join("breakglass-2.token");
+
+    let admin_token = seed_state(&state_path, &keyring_path, &signing_key_path);
+    fs::write(&admin_token_path, admin_token.as_bytes()).expect("write admin token");
+    set_0600(&admin_token_path);
+
+    let addr = free_addr();
+    let fortd = std::env::var("CARGO_BIN_EXE_fortd").expect("fortd path");
+    let fort = std::env::var("CARGO_BIN_EXE_fort").expect("fort path");
+    let breakglass = std::env::var("CARGO_BIN_EXE_fort-breakglass").expect("fort-breakglass path");
+    let host = format!("http://{addr}");
+    fs::write(
+        &config_path,
+        format!(
+            "addr = \"{addr}\"\nstate_path = \"{}\"\njwt_signing_key_file = \"{}\"\nsafe_root = \"{}\"\nvault_keyring_file = \"{}\"\ntoken_ttl = \"15m\"\nrefresh_session_ttl = \"30d\"\nrun_ttl = \"60s\"\nsecret_ttl = \"120s\"\n",
+            state_path.display(),
+            signing_key_path.display(),
+            safe_root.display(),
+            keyring_path.display(),
+        ),
+    )
+    .expect("write fortd config");
+
+    let mut child = Command::new(&fortd)
+        .args(["--config-file", config_path.to_str().expect("config path")])
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .expect("spawn fortd");
+    wait_for(Duration::from_secs(10), || {
+        Command::new(&fort)
+            .args([
+                "--host",
+                &host,
+                "--token-file",
+                admin_token_path.to_str().expect("admin token path"),
+                "doctor",
+            ])
+            .status()
+            .ok()
+            .is_some_and(|status| status.success())
+    });
+
+    run_ok(
+        &fort,
+        &[
+            "--host",
+            &host,
+            "--token-file",
+            admin_token_path.to_str().unwrap(),
+            "agent",
+            "create",
+            "--id",
+            "fort-breakglass-admin",
+            "--type",
+            "user",
+        ],
+    );
+    run_ok(
+        &fort,
+        &[
+            "--host",
+            &host,
+            "--token-file",
+            admin_token_path.to_str().unwrap(),
+            "agent",
+            "policy",
+            "set",
+            "--id",
+            "fort-breakglass-admin",
+            "--bind",
+            "*:*:*",
+        ],
+    );
+
+    let first = run_capture(
+        &breakglass,
+        &[
+            "--state-path",
+            state_path.to_str().unwrap(),
+            "--signing-key-file",
+            signing_key_path.to_str().unwrap(),
+        ],
+    );
+    assert!(!first.trim().is_empty(), "breakglass must print a token");
+    fs::write(&first_token_path, first.trim().as_bytes()).expect("write first token");
+    set_0600(&first_token_path);
+    run_ok(
+        &fort,
+        &[
+            "--host",
+            &host,
+            "--token-file",
+            first_token_path.to_str().unwrap(),
+            "doctor",
+        ],
+    );
+
+    let second = run_capture(
+        &breakglass,
+        &[
+            "--state-path",
+            state_path.to_str().unwrap(),
+            "--signing-key-file",
+            signing_key_path.to_str().unwrap(),
+        ],
+    );
+    assert_ne!(first.trim(), second.trim(), "reissue must mint a new token");
+    fs::write(&second_token_path, second.trim().as_bytes()).expect("write second token");
+    set_0600(&second_token_path);
+
+    run_fails(
+        &fort,
+        &[
+            "--host",
+            &host,
+            "--token-file",
+            first_token_path.to_str().unwrap(),
+            "doctor",
+        ],
+        "auth: failed",
+    );
+    run_ok(
+        &fort,
+        &[
+            "--host",
+            &host,
+            "--token-file",
+            second_token_path.to_str().unwrap(),
+            "doctor",
+        ],
+    );
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mut perms = fs::metadata(&signing_key_path)
+            .expect("stat signing key")
+            .permissions();
+        perms.set_mode(0o644);
+        fs::set_permissions(&signing_key_path, perms).expect("chmod signing key");
+    }
+    let output = Command::new(&breakglass)
+        .args([
+            "--state-path",
+            state_path.to_str().unwrap(),
+            "--signing-key-file",
+            signing_key_path.to_str().unwrap(),
+        ])
+        .output()
+        .expect("run breakglass with open key file");
+    assert!(
+        !output.status.success(),
+        "breakglass must reject a too-open signing key file"
+    );
+
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+#[test]
+fn fort_cli_uses_managed_codex_session_like_si_fort() {
+    let temp = TempDir::new().expect("tempdir");
+    let state_dir = temp.path().join("state");
+    let safe_root = temp.path().join("safe");
+    let safe_repo = safe_root.join("safe");
+    fs::create_dir_all(&state_dir).expect("mkdir state");
+    fs::create_dir_all(&safe_repo).expect("mkdir safe");
+
+    let state_path = state_dir.join("state.json");
+    let keyring_path = state_dir.join("vault-keyring.json");
+    let signing_key_path = state_dir.join("jwt-signing.key");
+    let config_path = state_dir.join("fortd.toml");
+    let admin_token_path = state_dir.join("admin.token");
+    let secret_value_path = state_dir.join("managed-value");
+    let missing_settings = state_dir.join("missing-settings.toml");
+    let codex_home = temp.path().join("codex");
+    let managed_dir = codex_home.join("fort");
+    fs::create_dir_all(&managed_dir).expect("mkdir managed fort dir");
+    let managed_refresh = managed_dir.join("refresh.token");
+    let managed_access = managed_dir.join("access.token");
+
+    let admin_token = seed_state(&state_path, &keyring_path, &signing_key_path);
+    fs::write(&admin_token_path, admin_token.as_bytes()).expect("write admin token");
+    set_0600(&admin_token_path);
+    fs::write(&secret_value_path, b"managed-secret\n").expect("write secret value");
+    set_0600(&secret_value_path);
+
+    let addr = free_addr();
+    let fortd = std::env::var("CARGO_BIN_EXE_fortd").expect("fortd path");
+    let fort = std::env::var("CARGO_BIN_EXE_fort").expect("fort path");
+    let host = format!("http://{addr}");
+    fs::write(
+        &config_path,
+        format!(
+            "addr = \"{addr}\"\nstate_path = \"{}\"\njwt_signing_key_file = \"{}\"\nsafe_root = \"{}\"\nvault_keyring_file = \"{}\"\ntoken_ttl = \"15m\"\nrefresh_session_ttl = \"30d\"\nrun_ttl = \"60s\"\nsecret_ttl = \"120s\"\n",
+            state_path.display(),
+            signing_key_path.display(),
+            safe_root.display(),
+            keyring_path.display(),
+        ),
+    )
+    .expect("write fortd config");
+
+    let mut child = Command::new(&fortd)
+        .args(["--config-file", config_path.to_str().expect("config path")])
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .expect("spawn fortd");
+    wait_for(Duration::from_secs(10), || {
+        Command::new(&fort)
+            .args([
+                "--host",
+                &host,
+                "--token-file",
+                admin_token_path.to_str().expect("admin token path"),
+                "doctor",
+            ])
+            .status()
+            .ok()
+            .is_some_and(|status| status.success())
+    });
+
+    run_ok(
+        &fort,
+        &[
+            "--host",
+            &host,
+            "--token-file",
+            admin_token_path.to_str().unwrap(),
+            "set",
+            "--repo",
+            "safe",
+            "--env",
+            "dev",
+            "--key",
+            "MANAGED_KEY",
+            "--value-file",
+            secret_value_path.to_str().unwrap(),
+        ],
+    );
+    run_ok(
+        &fort,
+        &[
+            "--host",
+            &host,
+            "--token-file",
+            admin_token_path.to_str().unwrap(),
+            "agent",
+            "create",
+            "--id",
+            "session-worker",
+            "--type",
+            "workload",
+        ],
+    );
+    run_ok(
+        &fort,
+        &[
+            "--host",
+            &host,
+            "--token-file",
+            admin_token_path.to_str().unwrap(),
+            "agent",
+            "policy",
+            "set",
+            "--id",
+            "session-worker",
+            "--bind",
+            "safe:dev:get",
+        ],
+    );
+    run_ok(
+        &fort,
+        &[
+            "--host",
+            &host,
+            "--token-file",
+            admin_token_path.to_str().unwrap(),
+            "auth",
+            "session",
+            "open",
+            "--agent",
+            "session-worker",
+            "--access-ttl",
+            "3m",
+            "--refresh-ttl",
+            "30m",
+            "--refresh-token-out",
+            managed_refresh.to_str().unwrap(),
+        ],
+    );
+    let first_refresh = fs::read_to_string(&managed_refresh).expect("read managed refresh");
+    assert!(
+        !managed_access.exists(),
+        "no access token file before first managed use"
+    );
+
+    let managed_get = || {
+        Command::new(&fort)
+            .args([
+                "--host",
+                &host,
+                "get",
+                "--repo",
+                "safe",
+                "--env",
+                "dev",
+                "--key",
+                "MANAGED_KEY",
+                "--format",
+                "raw",
+            ])
+            .env("CODEX_HOME", &codex_home)
+            .env("FORT_SETTINGS_FILE", &missing_settings)
+            .env_remove("FORT_HOST")
+            .env_remove("FORT_TOKEN_PATH")
+            .env_remove("FORT_BOOTSTRAP_TOKEN_FILE")
+            .output()
+            .expect("run managed fort get")
+    };
+
+    let output = managed_get();
+    assert!(
+        output.status.success(),
+        "managed get failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        "managed-secret"
+    );
+    assert!(
+        managed_access.exists(),
+        "bootstrap must write the managed access token file"
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            fs::metadata(&managed_access)
+                .expect("stat managed access")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
+    }
+    let second_refresh = fs::read_to_string(&managed_refresh).expect("read rotated refresh");
+    assert_ne!(
+        first_refresh.trim(),
+        second_refresh.trim(),
+        "bootstrap must rotate the managed refresh token"
+    );
+
+    let output = managed_get();
+    assert!(
+        output.status.success(),
+        "second managed get failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        fs::read_to_string(&managed_refresh).expect("read refresh again"),
+        second_refresh,
+        "a fresh managed session must not rotate again"
+    );
+
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+#[test]
+fn fort_list_survives_early_closed_stdout() {
+    let temp = TempDir::new().expect("tempdir");
+    let state_dir = temp.path().join("state");
+    let safe_root = temp.path().join("safe");
+    let safe_repo = safe_root.join("safe");
+    fs::create_dir_all(&state_dir).expect("mkdir state");
+    fs::create_dir_all(&safe_repo).expect("mkdir safe");
+
+    let state_path = state_dir.join("state.json");
+    let keyring_path = state_dir.join("vault-keyring.json");
+    let signing_key_path = state_dir.join("jwt-signing.key");
+    let config_path = state_dir.join("fortd.toml");
+    let admin_token_path = state_dir.join("admin.token");
+    let secret_value_path = state_dir.join("pipe-value");
+
+    let admin_token = seed_state(&state_path, &keyring_path, &signing_key_path);
+    fs::write(&admin_token_path, admin_token.as_bytes()).expect("write admin token");
+    set_0600(&admin_token_path);
+    fs::write(&secret_value_path, b"pipe-secret\n").expect("write secret value");
+    set_0600(&secret_value_path);
+
+    let addr = free_addr();
+    let fortd = std::env::var("CARGO_BIN_EXE_fortd").expect("fortd path");
+    let fort = std::env::var("CARGO_BIN_EXE_fort").expect("fort path");
+    let host = format!("http://{addr}");
+    fs::write(
+        &config_path,
+        format!(
+            "addr = \"{addr}\"\nstate_path = \"{}\"\njwt_signing_key_file = \"{}\"\nsafe_root = \"{}\"\nvault_keyring_file = \"{}\"\ntoken_ttl = \"15m\"\nrefresh_session_ttl = \"30d\"\nrun_ttl = \"60s\"\nsecret_ttl = \"120s\"\n",
+            state_path.display(),
+            signing_key_path.display(),
+            safe_root.display(),
+            keyring_path.display(),
+        ),
+    )
+    .expect("write fortd config");
+
+    let mut child = Command::new(&fortd)
+        .args(["--config-file", config_path.to_str().expect("config path")])
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .expect("spawn fortd");
+    wait_for(Duration::from_secs(10), || {
+        Command::new(&fort)
+            .args([
+                "--host",
+                &host,
+                "--token-file",
+                admin_token_path.to_str().expect("admin token path"),
+                "doctor",
+            ])
+            .status()
+            .ok()
+            .is_some_and(|status| status.success())
+    });
+
+    for index in 0..30 {
+        run_ok(
+            &fort,
+            &[
+                "--host",
+                &host,
+                "--token-file",
+                admin_token_path.to_str().unwrap(),
+                "set",
+                "--repo",
+                "safe",
+                "--env",
+                "dev",
+                "--key",
+                &format!("PIPE_KEY_{index:02}"),
+                "--value-file",
+                secret_value_path.to_str().unwrap(),
+            ],
+        );
+    }
+
+    let mut lister = Command::new(&fort)
+        .args([
+            "--host",
+            &host,
+            "--token-file",
+            admin_token_path.to_str().unwrap(),
+            "list",
+            "--repo",
+            "safe",
+            "--env",
+            "dev",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn fort list");
+    let mut probe = [0u8; 8];
+    let _ = lister
+        .stdout
+        .as_mut()
+        .expect("list stdout")
+        .read(&mut probe);
+    drop(lister.stdout.take());
+    let output = lister.wait_with_output().expect("wait for fort list");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert_ne!(
+        output.status.code(),
+        Some(101),
+        "fort list must not panic on EPIPE: {stderr}"
+    );
+    assert!(
+        !stderr.contains("panicked"),
+        "fort list must not panic on EPIPE: {stderr}"
+    );
+
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 fn seed_state(state_path: &PathBuf, keyring_path: &PathBuf, signing_key_path: &PathBuf) -> String {
     let seed = std::env::var("CARGO_BIN_EXE_fort-seed").expect("fort-seed path");
     let output = Command::new(seed)

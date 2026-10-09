@@ -1,4 +1,3 @@
-use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -22,6 +21,7 @@ struct Cli {
 }
 
 fn main() {
+    fort::sigpipe::restore_default();
     if let Err(error) = run() {
         eprintln!("{error:#}");
         std::process::exit(1);
@@ -31,9 +31,9 @@ fn main() {
 fn run() -> Result<()> {
     let cli = Cli::parse();
     let state_path = cli.state_path.display().to_string();
-    let signing_key = fs::read_to_string(&cli.signing_key_file)
-        .with_context(|| format!("read signing key {}", cli.signing_key_file.display()))?;
-    let signing_key = signing_key.trim().as_bytes().to_vec();
+    let signing_key_file = cli.signing_key_file.display().to_string();
+    let signing_key = fort::config::read_secret_file(&signing_key_file)?;
+    let signing_key = signing_key.as_bytes().to_vec();
     let store =
         Arc::new(Store::new(&state_path).with_context(|| format!("open state {state_path}"))?);
     let agent = store

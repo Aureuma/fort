@@ -5,5 +5,6 @@ pub mod hostcfg;
 pub mod model;
 pub mod runtime_agent;
 pub mod server;
+pub mod sigpipe;
 pub mod store;
 pub mod vaultbridge;

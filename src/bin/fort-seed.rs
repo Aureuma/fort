@@ -9,6 +9,7 @@ use std::time::Duration;
 use serde_json::json;
 
 fn main() {
+    fort::sigpipe::restore_default();
     if let Err(error) = run() {
         eprintln!("{error}");
         std::process::exit(1);
