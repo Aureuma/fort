@@ -1,4 +1,6 @@
 # Fort Mission Contract
+See `SKILL.md` for the operator-facing CLI guide (login, get/set, admin flows).
+This file is the contributor contract: mission boundaries and invariants.
 ## Purpose
 Fort is the policy and authentication API boundary for Vault operations.
 Fort stays intentionally thin:
