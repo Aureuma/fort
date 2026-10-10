@@ -185,11 +185,11 @@ never stored, logged, or echoed — only the fingerprint is persisted.
 ```bash
 # one-time per machine (admin enrolls the machine's PAT fingerprint)
 fort --host https://fort.aureuma.ai --token-file admin.token \
-  agent create --id machine-vanguarda --type workload
+  agent create --id vps-vanguarda --type workload
 fort --host https://fort.aureuma.ai --token-file admin.token \
-  agent policy set --id machine-vanguarda --bind '*:*:*'
+  agent policy set --id vps-vanguarda --bind '*:*:*'
 fort --host https://fort.aureuma.ai --token-file admin.token \
-  auth github enroll --agent machine-vanguarda --pat-file machine.pat
+  auth github enroll --agent vps-vanguarda --pat-file machine.pat
 
 # on the machine: log in (writes the managed session, no flags needed after)
 fort --host https://fort.aureuma.ai auth github login --pat-file machine.pat
