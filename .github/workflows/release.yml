@@ -165,7 +165,8 @@ jobs:
             arch="${target##*-}"
             asset="dist/fort_${version}_${os}_${arch}.tar.gz"
             [[ -f "${asset}" ]] || { echo "missing ${asset}" >&2; exit 1; }
-            tar -tzf "${asset}" | grep -qx "fort" || { echo "${asset} missing fort binary" >&2; exit 1; }
+            contents="$(tar -tzf "${asset}")"
+            grep -qx "fort" <<<"${contents}" || { echo "${asset} missing fort binary" >&2; exit 1; }
           done
           (cd dist && sha256sum -c checksums.txt)
           echo "release archives verified for ${tag}"
