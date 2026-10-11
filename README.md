@@ -179,8 +179,8 @@ fort --host https://fort.aureuma.ai doctor
 
 Remote machines authenticate with a GitHub fine-grained PAT. Fort verifies the
 PAT live against the GitHub API (`GET /user`) and maps it to a Fort agent via
-an HMAC-SHA256 fingerprint keyed by a server-side pepper. The PAT itself is
-never stored, logged, or echoed — only the fingerprint is persisted.
+an HMAC-SHA256 fingerprint keyed by a server-side pepper. The server never
+stores, logs, or echoes the PAT itself — only the fingerprint is persisted.
 
 ```bash
 # one-time per machine (admin enrolls the machine's PAT fingerprint)
@@ -192,10 +192,16 @@ fort --host https://fort.aureuma.ai --token-file admin.token \
   auth github enroll --agent vps-vanguarda --pat-file machine.pat
 
 # on the machine: log in (writes the managed session, no flags needed after)
-fort --host https://fort.aureuma.ai auth github login --pat-file machine.pat
+fort --host https://fort.aureuma.ai auth github login
 fort --host https://fort.aureuma.ai get --repo safe --env prod --key NPM_TOKEN
 fort --host https://fort.aureuma.ai auth github logout
 ```
+
+Without `--pat-file` (needs fort 1.0.7+), login reuses the stored PAT at
+`~/.fort/github.pat` when present, otherwise it prompts for the PAT with
+hidden input and stores it there as a `0600` file after a successful login.
+Delete that file to enter a different PAT. `--pat-file` still bypasses the
+prompt and the stored PAT, and is never itself stored.
 
 Rules:
 

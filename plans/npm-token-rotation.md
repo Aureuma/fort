@@ -7,7 +7,7 @@ Branch: `main` (fast-forwarded from dedicated feature work)
 ## Purpose
 
 Add a Fort CLI path for rotating third-party service API keys, starting with npm access tokens.
-The implementation must keep Fort as the Safe/SI Vault auth boundary, avoid Fort-owned plaintext
+The implementation must keep Fort as the Safe/Vault auth boundary, avoid Fort-owned plaintext
 secret persistence, and support future providers without implementing speculative provider code now.
 
 ## Scope
@@ -56,12 +56,12 @@ Completed:
 12. Expanded the local integration test so it verifies npm create, Fort write, GitHub encrypted secret update, and old npm token revoke ordering.
 13. Changed `--dry-run` to validate command shape and configured sinks without reading secret values, so missing Svelta scopes no longer block preflight.
 14. Rechecked the user-specified Safe/Fort location structurally and confirmed the Svelta npm candidates are under `safe/aureuma`, exposed through Fort as `aureuma/dev` and `aureuma/prod`.
-15. Confirmed through `si fort run` that `aureuma/prod` has `NPM_TOKEN`, `NODE_AUTH_TOKEN`, and `SV_NPM_GAT_AUREUMA`, with `NPM_TOKEN` and `NODE_AUTH_TOKEN` equal.
-16. Confirmed through `si fort run` that npm rejects both `aureuma/prod:SV_NPM_GAT_AUREUMA` and `aureuma/dev:SV_NPM_GAT_AUREUMA` with `E401` on `npm whoami`.
+15. Confirmed through `fort run` that `aureuma/prod` has `NPM_TOKEN`, `NODE_AUTH_TOKEN`, and `SV_NPM_GAT_AUREUMA`, with `NPM_TOKEN` and `NODE_AUTH_TOKEN` equal.
+16. Confirmed through `fort run` that npm rejects both `aureuma/prod:SV_NPM_GAT_AUREUMA` and `aureuma/dev:SV_NPM_GAT_AUREUMA` with `E401` on `npm whoami`.
 17. Confirmed `SV_NPM_GAT_AUREUMA` could list tokens via `GET /-/npm/v1/tokens` but does not appear to be a publisher/session credential for token creation, and it was revoked during validation.
 18. Confirmed `aureuma/prod` does not expose the required live token creation inputs `NPM_PASSWORD` or `NPM_OTP` through Fort.
 19. Added negative-path coverage for passwordless-capable providers that reject passwordless token creation.
-20. Re-ran managed-runtime checks (`si codex shell --profile gadolina --slot nova-actor`) and confirmed:
+20. Re-ran managed-runtime checks (`codex shell --profile gadolina --slot nova-actor`) and confirmed:
    - `aureuma/prod` exposes `NPM_TOKEN`, `NODE_AUTH_TOKEN`, and `SV_NPM_GAT_AUREUMA`.
    - `npm whoami` for each token returns `E401`.
    - `orbit` and `viva` GitHub PAT candidates return `401 Bad credentials` from `GET /user`.
@@ -105,7 +105,7 @@ This succeeds without loading secret values and reports `secret_values_loaded: f
 
 Current blocker:
 
-Fort runtime auth works with `CODEX_HOME=/home/shawn/.si/codex/profiles/gadolina`. The Svelta-looking npm
+Fort runtime auth works with the managed `gadolina` Codex profile runtime. The Svelta-looking npm
 keys are currently in `aureuma/dev` and `aureuma/prod`, not in a `safe/svelta*` scope. The available
 Fort-exposed npm token candidates are present but fail npm authentication with `E401`, and `aureuma/prod`
 does not expose the `NPM_PASSWORD`/`NPM_OTP` inputs needed for live npm token creation. `SV_NPM_GAT_AUREUMA` also

@@ -1,8 +1,10 @@
 [package]
 name = "fort"
-version = "1.0.6"
+version = "1.0.7"
 edition = "2024"
 rust-version = "1.94"
+license = "AGPL-3.0-only"
+repository = "https://github.com/Aureuma/fort"
 
 [dependencies]
 anyhow = "1.0.100"

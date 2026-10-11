@@ -2391,3 +2391,212 @@ fn run_capture_session(bin: &str, args: &[&str], session_dir: &PathBuf) -> Strin
     );
     String::from_utf8(output.stdout).expect("stdout utf8")
 }
+
+fn run_session_with_stdin(
+    bin: &str,
+    args: &[&str],
+    session_dir: &PathBuf,
+    stdin_data: &str,
+) -> std::process::Output {
+    let mut child = Command::new(bin)
+        .args(args)
+        .env("FORT_SESSION_DIR", session_dir)
+        .env_remove("FORT_TOKEN_PATH")
+        .env_remove("FORT_BOOTSTRAP_TOKEN_FILE")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .expect("spawn command");
+    child
+        .stdin
+        .take()
+        .expect("piped stdin")
+        .write_all(stdin_data.as_bytes())
+        .expect("write stdin");
+    child.wait_with_output().expect("wait command")
+}
+
+#[test]
+fn fort_github_login_prompts_and_stores_pat() {
+    let temp = TempDir::new().expect("tempdir");
+    let state_dir = temp.path().join("state");
+    let safe_root = temp.path().join("safe");
+    let safe_repo = safe_root.join("safe");
+    fs::create_dir_all(&state_dir).expect("mkdir state");
+    fs::create_dir_all(&safe_repo).expect("mkdir safe");
+
+    let state_path = state_dir.join("state.json");
+    let keyring_path = state_dir.join("vault-keyring.json");
+    let signing_key_path = state_dir.join("jwt-signing.key");
+    let pepper_path = state_dir.join("github-pepper");
+    let config_path = state_dir.join("fortd.toml");
+    let admin_token_path = state_dir.join("admin.token");
+    let pat_path = state_dir.join("machine.pat");
+    let session_dir = temp.path().join("session");
+    let fresh_session_dir = temp.path().join("fresh-home").join("session");
+
+    let admin_token = seed_state(&state_path, &keyring_path, &signing_key_path);
+    fs::write(&admin_token_path, admin_token.as_bytes()).expect("write admin token");
+    set_0600(&admin_token_path);
+    fs::write(&pepper_path, "test-pepper-that-is-long-enough-32").expect("write pepper");
+    set_0600(&pepper_path);
+    fs::write(&pat_path, "valid-test-pat\n").expect("write pat");
+    set_0600(&pat_path);
+
+    // enroll + piped-stdin login + stored-PAT re-login = 3 GitHub calls.
+    let (github_base, github_handle) = start_mock_github_user_api(3);
+
+    let addr = free_addr();
+    let fortd = std::env::var("CARGO_BIN_EXE_fortd").expect("fortd path");
+    let fort = std::env::var("CARGO_BIN_EXE_fort").expect("fort path");
+    let host = format!("http://{addr}");
+    fs::write(
+        &config_path,
+        format!(
+            "addr = \"{addr}\"\nstate_path = \"{}\"\njwt_signing_key_file = \"{}\"\nsafe_root = \"{}\"\nvault_keyring_file = \"{}\"\ntoken_ttl = \"15m\"\nrefresh_session_ttl = \"30d\"\nrun_ttl = \"60s\"\nsecret_ttl = \"120s\"\ngithub_pepper_file = \"{}\"\ngithub_api_base = \"{}\"\n",
+            state_path.display(),
+            signing_key_path.display(),
+            safe_root.display(),
+            keyring_path.display(),
+            pepper_path.display(),
+            github_base,
+        ),
+    )
+    .expect("write fortd config");
+
+    let mut child = Command::new(&fortd)
+        .args(["--config-file", config_path.to_str().expect("config path")])
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .expect("spawn fortd");
+    wait_for(Duration::from_secs(10), || {
+        Command::new(&fort)
+            .args([
+                "--host",
+                &host,
+                "--token-file",
+                admin_token_path.to_str().expect("admin token path"),
+                "doctor",
+            ])
+            .status()
+            .ok()
+            .is_some_and(|status| status.success())
+    });
+
+    let admin = admin_token_path.to_str().unwrap().to_string();
+    run_ok(
+        &fort,
+        &[
+            "--host", &host, "--token-file", &admin, "agent", "create", "--id",
+            "prompt-test", "--type", "workload",
+        ],
+    );
+    run_ok(
+        &fort,
+        &[
+            "--host", &host, "--token-file", &admin, "agent", "policy", "set", "--id",
+            "prompt-test", "--bind", "*:*:*",
+        ],
+    );
+    run_ok(
+        &fort,
+        &[
+            "--host",
+            &host,
+            "--token-file",
+            &admin,
+            "auth",
+            "github",
+            "enroll",
+            "--agent",
+            "prompt-test",
+            "--pat-file",
+            pat_path.to_str().unwrap(),
+        ],
+    );
+
+    // Login without --pat-file reads the PAT from stdin and stores it.
+    let login = run_session_with_stdin(
+        &fort,
+        &["--host", &host, "auth", "github", "login"],
+        &session_dir,
+        "valid-test-pat\n",
+    );
+    let login_stdout = String::from_utf8_lossy(&login.stdout).to_string();
+    let login_stderr = String::from_utf8_lossy(&login.stderr).to_string();
+    assert!(
+        login.status.success(),
+        "piped-stdin login failed: stdout={login_stdout} stderr={login_stderr}"
+    );
+    assert!(
+        login_stdout.contains("logged in as prompt-test"),
+        "login output: {login_stdout}"
+    );
+    assert!(
+        !login_stdout.contains("valid-test-pat") && !login_stderr.contains("valid-test-pat"),
+        "login must not echo the PAT: stdout={login_stdout} stderr={login_stderr}"
+    );
+    let stored_pat = session_dir
+        .parent()
+        .expect("session parent")
+        .join("github.pat");
+    assert!(stored_pat.exists(), "login must store the entered PAT");
+    assert_eq!(
+        fs::read_to_string(&stored_pat).expect("read stored pat").trim(),
+        "valid-test-pat"
+    );
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            fs::metadata(&stored_pat)
+                .expect("stat stored pat")
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600,
+            "stored PAT must be 0600"
+        );
+    }
+
+    // Re-login without --pat-file reuses the stored PAT (empty stdin).
+    let relogin = run_session_with_stdin(
+        &fort,
+        &["--host", &host, "auth", "github", "login"],
+        &session_dir,
+        "",
+    );
+    let relogin_stdout = String::from_utf8_lossy(&relogin.stdout).to_string();
+    let relogin_stderr = String::from_utf8_lossy(&relogin.stderr).to_string();
+    assert!(
+        relogin.status.success(),
+        "stored-PAT re-login failed: stdout={relogin_stdout} stderr={relogin_stderr}"
+    );
+    assert!(
+        relogin_stdout.contains("logged in as prompt-test"),
+        "re-login output: {relogin_stdout}"
+    );
+
+    // With no stored PAT and no stdin, login fails without contacting GitHub.
+    let missing = run_session_with_stdin(
+        &fort,
+        &["--host", &host, "auth", "github", "login"],
+        &fresh_session_dir,
+        "",
+    );
+    assert!(
+        !missing.status.success(),
+        "login without any PAT succeeded unexpectedly"
+    );
+    assert!(
+        String::from_utf8_lossy(&missing.stderr).contains("--pat-file"),
+        "missing-PAT error must mention --pat-file: {}",
+        String::from_utf8_lossy(&missing.stderr)
+    );
+
+    github_handle.join().expect("join mock github");
+    let _ = child.kill();
+    let _ = child.wait();
+}

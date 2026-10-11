@@ -315,7 +315,7 @@ enum AuthGithubSubcommand {
 #[derive(Args)]
 struct AuthGithubLoginArgs {
     #[arg(long)]
-    pat_file: String,
+    pat_file: Option<String>,
     #[arg(long, default_value = "fort-api")]
     aud: String,
     #[arg(long, default_value = "")]
@@ -1269,7 +1269,22 @@ impl Client {
         match command {
             AuthGithubSubcommand::Login(args) => {
                 require_pat_tls(&self.host)?;
-                let pat = read_secret_file(&args.pat_file).context("read --pat-file")?;
+                let stored_path =
+                    stored_pat_path().context("resolve fort config directory")?;
+                let stored_path_str = stored_path.display().to_string();
+                let mut store_prompted = false;
+                let mut used_stored = false;
+                let pat = match args.pat_file.as_deref() {
+                    Some(path) => read_secret_file(path).context("read --pat-file")?,
+                    None if stored_path.exists() => {
+                        used_stored = true;
+                        read_secret_file(&stored_path_str).context("read stored PAT")?
+                    }
+                    None => {
+                        store_prompted = true;
+                        prompt_pat()?
+                    }
+                };
                 let mut body = json!({ "pat": pat, "aud": args.aud.trim() });
                 if !args.access_ttl.trim().is_empty() {
                     body["access_ttl"] = json!(args.access_ttl.trim());
@@ -1283,7 +1298,17 @@ impl Client {
                     Some(body),
                     false,
                 )?;
-                ensure_status(status, 200, &response)?;
+                match ensure_status(status, 200, &response) {
+                    Ok(()) => {}
+                    Err(err) if used_stored => {
+                        return Err(err).with_context(|| {
+                            format!(
+                                "login with stored PAT failed; delete {stored_path_str} or pass --pat-file to use a new one"
+                            )
+                        });
+                    }
+                    Err(err) => return Err(err),
+                }
                 let access_token = response["access_token"]
                     .as_str()
                     .unwrap_or_default()
@@ -1294,6 +1319,9 @@ impl Client {
                     .to_string();
                 if access_token.trim().is_empty() || refresh_token.trim().is_empty() {
                     bail!("github login response missing tokens");
+                }
+                if store_prompted {
+                    write_secret_file(&stored_path_str, &pat).context("store entered PAT")?;
                 }
                 let session_dir =
                     fort_session_dir().context("resolve fort session directory")?;
@@ -1992,6 +2020,55 @@ fn managed_access_token_path() -> Option<String> {
 
 fn managed_refresh_token_path() -> Option<String> {
     fort_session_dir().map(|dir| dir.join("refresh.token").display().to_string())
+}
+
+fn stored_pat_path() -> Option<PathBuf> {
+    let session_dir = fort_session_dir()?;
+    match session_dir.parent() {
+        Some(parent) if !parent.as_os_str().is_empty() => Some(parent.join("github.pat")),
+        _ => Some(session_dir.join("github.pat")),
+    }
+}
+
+fn prompt_pat() -> Result<String> {
+    eprint!("GitHub PAT: ");
+    io::stderr().flush().ok();
+    let pat = read_hidden_line().context("read PAT")?;
+    eprintln!();
+    let pat = pat.trim().to_string();
+    if pat.is_empty() {
+        bail!("no PAT entered; pass --pat-file <path> or enter a PAT when prompted");
+    }
+    Ok(pat)
+}
+
+fn read_hidden_line() -> Result<String> {
+    use std::io::BufRead;
+    let stdin = io::stdin();
+    if unsafe { libc::isatty(libc::STDIN_FILENO) } != 1 {
+        let mut line = String::new();
+        stdin.lock().read_line(&mut line)?;
+        return Ok(line);
+    }
+    let mut original: libc::termios = unsafe { std::mem::zeroed() };
+    if unsafe { libc::tcgetattr(libc::STDIN_FILENO, &mut original) } != 0 {
+        let mut line = String::new();
+        stdin.lock().read_line(&mut line)?;
+        return Ok(line);
+    }
+    let mut hidden: libc::termios = unsafe { std::mem::zeroed() };
+    if unsafe { libc::tcgetattr(libc::STDIN_FILENO, &mut hidden) } != 0 {
+        let mut line = String::new();
+        stdin.lock().read_line(&mut line)?;
+        return Ok(line);
+    }
+    hidden.c_lflag &= !(libc::ECHO | libc::ECHONL);
+    unsafe { libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &hidden) };
+    let mut line = String::new();
+    let result = stdin.lock().read_line(&mut line);
+    unsafe { libc::tcsetattr(libc::STDIN_FILENO, libc::TCSANOW, &original) };
+    result?;
+    Ok(line)
 }
 
 const MANAGED_REFRESH_SKEW_SECONDS: i64 = 30;

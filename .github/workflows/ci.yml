@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+env:
+  CARGO_BUILD_JOBS: 2
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@1.94.0
+        with:
+          components: clippy
+
+      - name: Clippy
+        shell: bash
+        run: cargo clippy --locked --all-targets --jobs 2 -- -D warnings
+
+      - name: Check
+        shell: bash
+        run: cargo check --locked --all-targets --jobs 2
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@1.94.0
+
+      - name: Test
+        shell: bash
+        run: cargo test --locked --jobs 2

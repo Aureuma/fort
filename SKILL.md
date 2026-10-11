@@ -13,17 +13,21 @@ door to secret material: never read `safe` files directly, never use the
 ## Authenticate (GitHub PAT)
 
 Each machine has its own fine-grained PAT enrolled by fingerprint. PATs travel
-by file only — never argv, never env vars, never pasted into chat after setup.
+by file or interactive prompt only — never argv, never env vars, never pasted
+into chat after setup.
 
 ```bash
-fort --host https://fort.aureuma.ai auth github login --pat-file /path/to/machine.pat
+fort --host https://fort.aureuma.ai auth github login   # prompts once (1.0.7+), stores PAT, reuses it later
+fort --host https://fort.aureuma.ai auth github login --pat-file /path/to/machine.pat   # explicit file, never stored
 fort --host https://fort.aureuma.ai auth whoami   # agent_id=machine-<name>
 ```
 
 Login writes a managed session to `~/.fort/session/` (`FORT_SESSION_DIR`
 overrides). Later commands need no auth flags; the session refreshes itself.
-`--pat-file` must be a `0600` file. The CLI refuses PATs over plaintext HTTP
-except to loopback (tests).
+Without `--pat-file`, the entered PAT is stored at `~/.fort/github.pat`
+(`0600`) after a successful login and reused by later logins; delete it to
+enter a different PAT. `--pat-file` must be a `0600` file. The CLI refuses
+PATs over plaintext HTTP except to loopback (tests).
 
 ```bash
 fort --host https://fort.aureuma.ai auth github logout   # closes session, removes files
@@ -70,8 +74,9 @@ the replacement). One fingerprint per agent; re-enroll replaces.
 - Secret files are regular files at `0600` or stricter. Fort refuses looser ones.
 - Never commit secrets or PATs. Never print them. `grep`-check before committing
   near secrets.
-- After bootstrap, delete PAT files (`shred -u`) — the session + fingerprint
-  remain, the credential does not need to sit on disk.
+- After bootstrap, delete operator-supplied PAT files (`shred -u`). The
+  CLI-managed `~/.fort/github.pat` remains for re-login; remove it as well on
+  fully decommissioned machines (server-side revocation is `unenroll`).
 - If a PAT was ever pasted into chat or logs, treat it as exposed: rotate it at
   the source, unenroll, re-enroll.
 
@@ -80,7 +85,7 @@ the replacement). One fingerprint per agent; re-enroll replaces.
 | Symptom | Cause | Fix |
 | --- | --- | --- |
 | `401 unauthorized` on commands | session expired/revoked | `auth github login` again |
-| `401` on login | wrong PAT or not enrolled | check file, ask admin for `auth github list` |
+| `401` on login | wrong PAT or not enrolled | check file (or delete `~/.fort/github.pat` to re-enter), ask admin for `auth github list` |
 | `429 too many login attempts` | throttle (20 fails/5min/IP) | wait, fix the PAT, retry once |
 | `503 github verification unavailable` | GitHub unreachable | retry later; sessions already open keep working |
 | `refusing to send ... non-TLS` | http host with PAT | use the https host |
