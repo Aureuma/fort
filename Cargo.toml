@@ -1,6 +1,6 @@
 [package]
 name = "fort"
-version = "1.0.11"
+version = "1.0.12"
 edition = "2024"
 rust-version = "1.94"
 license = "AGPL-3.0-only"
@@ -50,3 +50,7 @@ path = "src/bin/fort-seed.rs"
 [[bin]]
 name = "fort-breakglass"
 path = "src/bin/fort-breakglass.rs"
+
+[[bin]]
+name = "fort-release"
+path = "src/bin/fort-release.rs"

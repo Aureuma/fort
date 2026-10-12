@@ -21,6 +21,9 @@ All notable changes to this project will be documented in this file.
 - Added human-readable `--help` text to every `fort`, `fortd`,
   `fort-agent`, `fort-breakglass`, and `fort-seed` command and flag, plus a
   help-coverage regression test.
+- Added the dev-only `fort-release` Rust helper: release version gate,
+  local asset build/verify, host and Homebrew smokes, and tap formula
+  rendering (byte-identical to the shell renderer it replaces).
 
 ### Fixed
 

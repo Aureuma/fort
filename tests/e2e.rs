@@ -3044,6 +3044,33 @@ fn fort_help_pages_have_no_blank_rows() {
         );
         assert_help_has_no_blank_rows(bin_env, &output.stdout);
     }
+
+    let release = std::env::var("CARGO_BIN_EXE_fort-release").expect("fort-release path");
+    let release_pages: &[&[&str]] = &[
+        &["--help"],
+        &["self", "--help"],
+        &["self", "validate-version", "--help"],
+        &["self", "assets", "--help"],
+        &["self", "verify", "--help"],
+        &["installer", "--help"],
+        &["installer", "smoke-host", "--help"],
+        &["installer", "smoke-homebrew", "--help"],
+        &["homebrew", "--help"],
+        &["homebrew", "render-tap-formula", "--help"],
+    ];
+    for page in release_pages {
+        let output = Command::new(&release)
+            .args(*page)
+            .output()
+            .expect("run fort-release help");
+        assert!(
+            output.status.success(),
+            "fort-release page {:?} failed: {}",
+            page,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_help_has_no_blank_rows(&format!("fort-release {}", page.join(" ")), &output.stdout);
+    }
 }
 
 fn assert_help_has_no_blank_rows(page: &str, stdout: &[u8]) {
