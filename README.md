@@ -4,11 +4,25 @@
 
 See also:
 - `docs/GUIDING_PRINCIPLES.md`
+- `CHANGELOG.md` and `docs/RELEASING.md` for versioning and the release process
 
 ## Components
 - `fortd`: HTTP API server
 - `fort`: CLI client
 - `fort-agent`: refreshes short-lived access tokens from a refresh-token file
+
+## Install
+```bash
+brew tap aureuma/fort
+brew install aureuma/fort/fort
+fort version
+fort doctor
+```
+
+Portable archives (`fort_<version>_{linux,darwin}_{amd64,arm64}.tar.gz` plus
+`checksums.txt`) are attached to each GitHub Release. Start with
+`fort auth github login`, then use `get`, `set`, `list`, and `run`.
+Every command documents itself: `fort --help`, `fort <command> --help`.
 
 ## Architecture
 Fort is intentionally thin.
@@ -64,7 +78,7 @@ cat > .artifacts/local/fortd.toml <<EOF
 addr = "127.0.0.1:8088"
 state_path = "$PWD/.artifacts/local/fort-state.json"
 jwt_signing_key_file = "$PWD/.artifacts/local/fort-jwt-signing.key"
-safe_root = "/home/shawn/Development/safe"
+safe_root = "<path-to-safe-checkout>"
 vault_keyring_file = "$HOME/.vault/keyring.json"
 token_ttl = "15m"
 refresh_session_ttl = "30d"

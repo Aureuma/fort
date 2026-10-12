@@ -67,3 +67,7 @@ Treat the following as regressions:
 ## Version Source Of Truth
 - The canonical hard-coded version source is the root `Cargo.toml` under `[package].version`.
 - Docs, release automation, packaging metadata, and examples must reference that version instead of introducing another independently maintained repo version.
+## Versioning And Releases
+- Every commit bumps PATCH in the same commit; only `vX.Y.0` minor tags are published (see `docs/RELEASING.md`).
+- Record user-facing changes in `CHANGELOG.md` under `Unreleased` in the same commit that makes them.
+- Never add a shell-based release step when `fort-release` (dev-only, never shipped) can do it; archives and formulae ship `fort`, `fortd`, `fort-agent` only.

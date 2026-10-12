@@ -13,6 +13,18 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Added README install instructions (Homebrew tap plus release archives)
+  and pointers to the changelog and release process.
+- Added weekly Dependabot updates for Cargo and GitHub Actions.
+- Added the patch-per-commit versioning and release rules to the
+  contributor contract (`AGENTS.md`).
+
+### Fixed
+
+- Fixed a stale hard-coded checkout path in the README local-run example.
+
 ## [v1.1.0] - 2026-10-12
 
 ### Added
