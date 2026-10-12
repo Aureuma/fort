@@ -123,7 +123,7 @@ jobs:
           ls -lah dist
 
       - name: Upload target archive artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: fort-release-${{ matrix.target }}
           path: dist/*.tar.gz
@@ -172,7 +172,7 @@ jobs:
           echo "release archives verified for ${tag}"
 
       - name: Upload combined release dist artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: fort-release-dist
           path: |
