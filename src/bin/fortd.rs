@@ -3,9 +3,16 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 #[derive(Parser)]
-#[command(name = "fortd")]
+#[command(
+    name = "fortd",
+    about = "Run the Fort policy/authentication API server",
+    long_about = "Serve the Fort v1 API: bearer-token auth, repo/env/op policy checks, and Vault-backed secret operations. Configuration comes from --config-file or the environment."
+)]
 struct FortdCli {
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "TOML config file (else read configuration from the environment)"
+    )]
     config_file: Option<PathBuf>,
 }
 

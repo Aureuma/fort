@@ -18,6 +18,9 @@ All notable changes to this project will be documented in this file.
 - Added an e2e regression test proving the old npm token is left alone when a
   GitHub Actions sink fails during `fort rotate npm`.
 - Added the npm token rotation operator runbook to `SKILL.md`.
+- Added human-readable `--help` text to every `fort`, `fortd`,
+  `fort-agent`, `fort-breakglass`, and `fort-seed` command and flag, plus a
+  help-coverage regression test.
 
 ### Fixed
 

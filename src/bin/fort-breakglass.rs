@@ -8,15 +8,19 @@ use fort::auth::{BREAKGLASS_ADMIN_AGENT_ID, Manager};
 use fort::store::Store;
 
 #[derive(Debug, Parser)]
-#[command(name = "fort-breakglass")]
+#[command(
+    name = "fort-breakglass",
+    about = "Mint an emergency break-glass admin token from local state",
+    long_about = "Direct-to-state recovery tool for operators locked out of the API: issues a short-lived admin token using the Fort state file and JWT signing key on disk. Requires local access to both files; reissue revokes prior break-glass tokens."
+)]
 struct Cli {
-    #[arg(long)]
+    #[arg(long, help = "Fort state file (fort-state.json)")]
     state_path: PathBuf,
-    #[arg(long)]
+    #[arg(long, help = "0600 file holding the JWT signing key")]
     signing_key_file: PathBuf,
-    #[arg(long, default_value = BREAKGLASS_ADMIN_AGENT_ID)]
+    #[arg(long, default_value = BREAKGLASS_ADMIN_AGENT_ID, help = "Agent id to mint the token for")]
     agent: String,
-    #[arg(long, default_value_t = 900)]
+    #[arg(long, default_value_t = 900, help = "Token lifetime in seconds")]
     ttl_secs: u64,
 }
 

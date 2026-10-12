@@ -6,10 +6,20 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
+use clap::Parser;
 use serde_json::json;
+
+#[derive(Parser)]
+#[command(
+    name = "fort-seed",
+    about = "Seed isolated Fort test fixtures (tests only, never shipped)",
+    long_about = "Create throwaway Fort state for integration tests: an admin agent with wildcard policy, workload agents, a canonical vault keyring, and a signing key. Prints the admin token to stdout. Configuration is environment-only: STATE_PATH, KEYRING_PATH, SIGNING_KEY_PATH, and comma-separated PROFILE_IDS."
+)]
+struct Cli {}
 
 fn main() {
     fort::sigpipe::restore_default();
+    let _cli = Cli::parse();
     if let Err(error) = run() {
         eprintln!("{error}");
         std::process::exit(1);

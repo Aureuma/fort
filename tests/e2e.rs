@@ -2965,3 +2965,154 @@ fn fort_github_login_prompts_and_stores_pat() {
     let _ = child.kill();
     let _ = child.wait();
 }
+
+#[test]
+fn fort_help_pages_have_no_blank_rows() {
+    let fort = std::env::var("CARGO_BIN_EXE_fort").expect("fort path");
+    let pages: &[&[&str]] = &[
+        &["--help"],
+        &["version", "--help"],
+        &["doctor", "--help"],
+        &["auth", "--help"],
+        &["auth", "issue", "--help"],
+        &["auth", "login", "--help"],
+        &["auth", "whoami", "--help"],
+        &["auth", "list", "--help"],
+        &["auth", "revoke", "--help"],
+        &["auth", "session", "--help"],
+        &["auth", "session", "open", "--help"],
+        &["auth", "session", "refresh", "--help"],
+        &["auth", "session", "close", "--help"],
+        &["auth", "github", "--help"],
+        &["auth", "github", "login", "--help"],
+        &["auth", "github", "logout", "--help"],
+        &["auth", "github", "enroll", "--help"],
+        &["auth", "github", "unenroll", "--help"],
+        &["auth", "github", "list", "--help"],
+        &["get", "--help"],
+        &["set", "--help"],
+        &["list", "--help"],
+        &["batch-get", "--help"],
+        &["scope", "--help"],
+        &["scope", "ensure", "--help"],
+        &["run", "--help"],
+        &["rotate", "--help"],
+        &["rotate", "npm", "--help"],
+        &["agent", "--help"],
+        &["agent", "create", "--help"],
+        &["agent", "get", "--help"],
+        &["agent", "list", "--help"],
+        &["agent", "set-status", "--help"],
+        &["agent", "rotate", "--help"],
+        &["agent", "remove", "--help"],
+        &["agent", "policy", "--help"],
+        &["agent", "policy", "get", "--help"],
+        &["agent", "policy", "set", "--help"],
+        &["agent", "policy", "add", "--help"],
+        &["agent", "policy", "remove", "--help"],
+        &["agent", "policy", "check", "--help"],
+    ];
+    for page in pages {
+        let output = Command::new(&fort)
+            .args(*page)
+            .output()
+            .expect("run fort help");
+        assert!(
+            output.status.success(),
+            "help page {:?} failed: {}",
+            page,
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_help_has_no_blank_rows(&format!("fort {}", page.join(" ")), &output.stdout);
+    }
+
+    for bin_env in [
+        "CARGO_BIN_EXE_fortd",
+        "CARGO_BIN_EXE_fort-agent",
+        "CARGO_BIN_EXE_fort-breakglass",
+        "CARGO_BIN_EXE_fort-seed",
+    ] {
+        let bin = std::env::var(bin_env).expect("bin path");
+        let output = Command::new(&bin)
+            .arg("--help")
+            .output()
+            .expect("run bin help");
+        assert!(
+            output.status.success(),
+            "{bin_env} --help failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_help_has_no_blank_rows(bin_env, &output.stdout);
+    }
+}
+
+fn assert_help_has_no_blank_rows(page: &str, stdout: &[u8]) {
+    let text = String::from_utf8_lossy(stdout);
+    assert!(
+        text.contains("Usage:"),
+        "{page} help is missing a Usage line: {text}"
+    );
+    let lines: Vec<&str> = text.lines().collect();
+    let mut index = 0;
+    while index < lines.len() {
+        let line = lines[index].trim_end();
+        if line.trim().is_empty() || !line.starts_with(char::is_whitespace) {
+            index += 1;
+            continue;
+        }
+        let body = line.trim_start();
+        if body.starts_with('-') {
+            // Flag row: described inline or by a following indented,
+            // non-annotation line.
+            let mut described = flag_row_has_inline_help(body);
+            if described {
+                index += 1;
+                continue;
+            }
+            let mut cursor = index + 1;
+            while cursor < lines.len() {
+                let next = lines[cursor].trim_end();
+                let next_trimmed = next.trim();
+                if next_trimmed.is_empty() {
+                    cursor += 1;
+                    continue;
+                }
+                if !next.starts_with(char::is_whitespace)
+                    || next_trimmed.starts_with('-')
+                    || next_trimmed.starts_with('[')
+                {
+                    break;
+                }
+                described = true;
+                break;
+            }
+            assert!(
+                described,
+                "{page} help has an undocumented flag row: {line}\n{text}"
+            );
+        } else {
+            // Command row: name plus description on the same line.
+            let mut parts = body.split_whitespace();
+            let name = parts.next().unwrap_or_default();
+            let described = parts.next().is_some();
+            assert!(
+                !name.is_empty() && described,
+                "{page} help has an undocumented command row: {line}\n{text}"
+            );
+        }
+        index += 1;
+    }
+}
+
+fn flag_row_has_inline_help(body: &str) -> bool {
+    let mut rest = body.trim_start();
+    loop {
+        let token = rest.split_whitespace().next().unwrap_or_default();
+        if token.starts_with('-') || token.starts_with('<') || token.starts_with('[') {
+            rest = rest[token.len()..].trim_start();
+        } else {
+            break;
+        }
+    }
+    !rest.is_empty()
+}

@@ -31,13 +31,20 @@ use crate::hostcfg::host_from_settings;
 use crate::model::{Binding, Operation};
 
 #[derive(Parser)]
-#[command(name = "fort")]
+#[command(
+    name = "fort",
+    about = "Policy and authentication API for Vault secret operations",
+    long_about = "Fort is the only door to secret material: it authenticates, authorizes repo/env/op access, and routes secret operations to Vault-encrypted safe data.\n\nHost resolution (first match wins): --host, FORT_HOST, ~/.fort/settings.toml [fort].host.\nAuthentication: --token-file, else the managed session in $FORT_SESSION_DIR (default ~/.fort/session/). See `fort auth github login` to start a session."
+)]
 pub struct FortCli {
-    #[arg(long)]
+    #[arg(long, help = "Fort server base URL (https outside tests)")]
     host: Option<String>,
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "0600 file holding a bearer token (else use the managed session)"
+    )]
     token_file: Option<String>,
-    #[arg(long)]
+    #[arg(long, help = "Print machine-readable JSON instead of text")]
     json: bool,
     #[command(subcommand)]
     command: FortCommand,
@@ -45,65 +52,91 @@ pub struct FortCli {
 
 #[derive(Subcommand)]
 enum FortCommand {
+    #[command(about = "Print the CLI version (no server contact)")]
     Version,
+    #[command(about = "Check server health, readiness, and current auth")]
     Doctor,
+    #[command(about = "Issue, inspect, and revoke tokens and sessions")]
     Auth(AuthCommand),
+    #[command(about = "Print one secret value")]
     Get(GetArgs),
+    #[command(about = "Write one secret value")]
     Set(SetArgs),
+    #[command(about = "List secret key names (never values)")]
     List(ListArgs),
-    #[command(name = "batch-get")]
+    #[command(name = "batch-get", about = "Print several secret values at once")]
     BatchGet(BatchGetArgs),
+    #[command(about = "Manage secret scopes (admin)")]
     Scope(ScopeCommand),
+    #[command(about = "Run a child command with secrets materialized")]
     Run(RunArgs),
+    #[command(about = "Rotate third-party provider credentials")]
     Rotate(Box<RotateCommand>),
+    #[command(about = "Manage agents and policies (admin)")]
     Agent(AgentCommand),
 }
 
 #[derive(Args)]
 struct GetArgs {
-    #[arg(long)]
+    #[arg(long, help = "Policy repository scope, e.g. aureuma")]
     repo: String,
-    #[arg(long)]
+    #[arg(long, help = "Environment scope, e.g. dev or prod")]
     env: String,
-    #[arg(long)]
+    #[arg(long, help = "Secret key name")]
     key: String,
-    #[arg(long, default_value = "raw")]
+    #[arg(long, default_value = "raw", help = "Output format: raw or json")]
     format: String,
 }
 
 #[derive(Args)]
 struct SetArgs {
-    #[arg(long)]
+    #[arg(long, help = "Policy repository scope, e.g. aureuma")]
     repo: String,
-    #[arg(long)]
+    #[arg(long, help = "Environment scope, e.g. dev or prod")]
     env: String,
-    #[arg(long)]
+    #[arg(long, help = "Secret key name")]
     key: String,
-    #[arg(long, conflicts_with = "value_file")]
+    #[arg(
+        long,
+        conflicts_with = "value_file",
+        help = "Secret value on argv (fixtures only; leaks into the process list)"
+    )]
     value: Option<String>,
-    #[arg(long, conflicts_with = "value")]
+    #[arg(
+        long,
+        conflicts_with = "value",
+        help = "0600 file holding the secret value (use for anything sensitive)"
+    )]
     value_file: Option<String>,
-    #[arg(long, default_value_t = 0)]
+    #[arg(
+        long,
+        default_value_t = 0,
+        help = "Compare-and-swap guard (reserved; the server does not enforce it yet)"
+    )]
     cas_version: i64,
 }
 
 #[derive(Args)]
 struct ListArgs {
-    #[arg(long)]
+    #[arg(long, help = "Policy repository scope, e.g. aureuma")]
     repo: String,
-    #[arg(long)]
+    #[arg(long, help = "Environment scope, e.g. dev or prod")]
     env: String,
-    #[arg(long, default_value = "")]
+    #[arg(
+        long,
+        default_value = "",
+        help = "Only list keys starting with this prefix"
+    )]
     prefix: String,
 }
 
 #[derive(Args)]
 struct BatchGetArgs {
-    #[arg(long)]
+    #[arg(long, help = "Policy repository scope, e.g. aureuma")]
     repo: String,
-    #[arg(long)]
+    #[arg(long, help = "Environment scope, e.g. dev or prod")]
     env: String,
-    #[arg(long)]
+    #[arg(long, help = "Comma-separated secret key names")]
     keys: String,
 }
 
@@ -115,30 +148,36 @@ struct ScopeCommand {
 
 #[derive(Subcommand)]
 enum ScopeSubcommand {
+    #[command(about = "Create a repo/env encryption scope if missing (admin)")]
     Ensure(ScopeEnsureArgs),
 }
 
 #[derive(Args)]
 struct ScopeEnsureArgs {
-    #[arg(long)]
+    #[arg(long, help = "Policy repository scope, e.g. aureuma")]
     repo: String,
-    #[arg(long)]
+    #[arg(long, help = "Environment scope, e.g. dev or prod")]
     env: String,
 }
 
 #[derive(Args)]
+#[command(about = "Run a child command with secrets materialized for its lifetime only")]
 struct RunArgs {
-    #[arg(long)]
+    #[arg(long, help = "Policy repository scope, e.g. aureuma")]
     repo: String,
-    #[arg(long)]
+    #[arg(long, help = "Environment scope, e.g. dev or prod")]
     env: String,
-    #[arg(long)]
+    #[arg(long, help = "Comma-separated secret key names")]
     keys: String,
-    #[arg(long, default_value = "files")]
+    #[arg(
+        long,
+        default_value = "files",
+        help = "Delivery mode: files (0600 temp files) or env"
+    )]
     mode: String,
-    #[arg(long, default_value = "60s")]
+    #[arg(long, default_value = "60s", help = "Run session lifetime, e.g. 60s")]
     ttl: String,
-    #[arg(last = true, required = true)]
+    #[arg(last = true, required = true, help = "Child command after --")]
     command: Vec<String>,
 }
 
@@ -150,64 +189,130 @@ struct RotateCommand {
 
 #[derive(Subcommand)]
 enum RotateSubcommand {
+    #[command(about = "Rotate an npm granular access token through Fort")]
     Npm(Box<NpmRotateArgs>),
 }
 
 #[derive(Args)]
+#[command(
+    about = "Rotate an npm granular access token through Fort",
+    long_about = "Create a new npm granular access token, store it back through Fort, sync configured GitHub Actions secrets, then revoke the old token only after every sink succeeds. All npm inputs resolve through Fort; the OTP always comes from a 0600 file. Run --dry-run first: it validates shape and sinks without loading secret values."
+)]
 struct NpmRotateArgs {
-    #[arg(long)]
+    #[arg(long, help = "Policy repository scope, e.g. aureuma")]
     repo: String,
-    #[arg(long)]
+    #[arg(long, help = "Environment scope, e.g. dev or prod")]
     env: String,
-    #[arg(long)]
+    #[arg(long, help = "Fort key holding the npm publish token to replace")]
     token_key: String,
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Fort key holding the npm token-management bearer (defaults to --token-key)"
+    )]
     management_token_key: Option<String>,
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Fort key holding the npm password (omit only for passwordless-capable credentials)"
+    )]
     password_key: Option<String>,
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "0600 file holding the current npm OTP (required unless --dry-run)"
+    )]
     otp_file: Option<String>,
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "0600 file holding a fresher OTP for revocation (defaults to --otp-file)"
+    )]
     revoke_otp_file: Option<String>,
-    #[arg(long)]
+    #[arg(long, help = "Name for the new npm token")]
     name: String,
-    #[arg(long, default_value = "")]
+    #[arg(long, default_value = "", help = "Description for the new npm token")]
     description: String,
-    #[arg(long, default_value_t = 90)]
+    #[arg(
+        long,
+        default_value_t = 90,
+        help = "New token lifetime in days (read-write capped at 90)"
+    )]
     expires_days: i64,
-    #[arg(long = "package")]
+    #[arg(
+        long = "package",
+        help = "Repeatable: package the token may publish, e.g. @org/pkg"
+    )]
     packages: Vec<String>,
-    #[arg(long = "scope")]
+    #[arg(long = "scope", help = "Repeatable: scope the token may publish")]
     scopes: Vec<String>,
-    #[arg(long = "org")]
+    #[arg(long = "org", help = "Repeatable: org the token may manage")]
     orgs: Vec<String>,
-    #[arg(long = "cidr")]
+    #[arg(long = "cidr", help = "Repeatable: CIDR the token is restricted to")]
     cidr: Vec<String>,
-    #[arg(long, default_value = "read-write")]
+    #[arg(
+        long,
+        default_value = "read-write",
+        help = "Packages/scopes permission: read-only, read-write, or no-access"
+    )]
     packages_permission: String,
-    #[arg(long, default_value = "no-access")]
+    #[arg(
+        long,
+        default_value = "no-access",
+        help = "Orgs permission: read-only, read-write, or no-access"
+    )]
     orgs_permission: String,
-    #[arg(long, default_value_t = false)]
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Grant all packages instead of explicit --package values"
+    )]
     all_packages: bool,
-    #[arg(long, default_value_t = false)]
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Set npm bypass_2fa on the new token"
+    )]
     bypass_2fa: bool,
-    #[arg(long, default_value_t = false)]
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Revoke the old npm token after every sink succeeds"
+    )]
     revoke_old: bool,
-    #[arg(long, default_value_t = false)]
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Validate shape and sinks without loading secret values"
+    )]
     dry_run: bool,
-    #[arg(long, default_value = "https://registry.npmjs.org")]
+    #[arg(
+        long,
+        default_value = "https://registry.npmjs.org",
+        help = "npm registry base URL"
+    )]
     registry: String,
-    #[arg(long = "github-actions-repo")]
+    #[arg(
+        long = "github-actions-repo",
+        help = "Repeatable Owner/repo to sync the new token into"
+    )]
     github_actions_repos: Vec<String>,
-    #[arg(long, default_value = "")]
+    #[arg(
+        long,
+        default_value = "",
+        help = "Actions secret name to update (required with --github-actions-repo)"
+    )]
     github_secret_name: String,
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Fort key holding the GitHub token (required with --github-actions-repo)"
+    )]
     github_token_key: Option<String>,
-    #[arg(long)]
+    #[arg(long, help = "Fort repo holding the GitHub token (defaults to --repo)")]
     github_token_repo: Option<String>,
-    #[arg(long)]
+    #[arg(long, help = "Fort env holding the GitHub token (defaults to --env)")]
     github_token_env: Option<String>,
-    #[arg(long, default_value = "https://api.github.com")]
+    #[arg(
+        long,
+        default_value = "https://api.github.com",
+        help = "GitHub API base URL"
+    )]
     github_api_base: String,
 }
 
@@ -219,38 +324,53 @@ struct AuthCommand {
 
 #[derive(Subcommand)]
 enum AuthSubcommand {
+    #[command(about = "Mint an access token for an agent (admin)")]
     Issue(AuthIssueArgs),
+    #[command(about = "Alias of issue (admin)")]
     Login(AuthIssueArgs),
+    #[command(about = "Show the identity behind the current token")]
     Whoami,
+    #[command(about = "List issued tokens (admin)")]
     List(AuthListArgs),
+    #[command(about = "Revoke a token by id (admin)")]
     Revoke(AuthRevokeArgs),
+    #[command(about = "Open, refresh, and close refresh sessions")]
     Session(AuthSessionCommand),
+    #[command(about = "Machine login with GitHub PATs")]
     Github(AuthGithubCommand),
 }
 
 #[derive(Args)]
 struct AuthIssueArgs {
-    #[arg(long)]
+    #[arg(long, help = "Agent id to mint the token for")]
     agent: String,
-    #[arg(long, default_value = "")]
+    #[arg(
+        long,
+        default_value = "",
+        help = "Token lifetime, e.g. 15m (empty means server default)"
+    )]
     ttl: String,
-    #[arg(long, default_value = "fort-api")]
+    #[arg(long, default_value = "fort-api", help = "Token audience claim")]
     aud: String,
 }
 
 #[derive(Args)]
 struct AuthListArgs {
-    #[arg(long, default_value = "")]
+    #[arg(long, default_value = "", help = "Only list tokens for this agent id")]
     agent: String,
-    #[arg(long, default_value_t = false)]
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Hide revoked and expired tokens"
+    )]
     active_only: bool,
 }
 
 #[derive(Args)]
 struct AuthRevokeArgs {
-    #[arg(long)]
+    #[arg(long, help = "Token id (jti) to revoke")]
     jti: String,
-    #[arg(long, default_value = "")]
+    #[arg(long, default_value = "", help = "Audit reason for the revocation")]
     reason: String,
 }
 
@@ -262,38 +382,55 @@ struct AuthSessionCommand {
 
 #[derive(Subcommand)]
 enum AuthSessionSubcommand {
+    #[command(about = "Open a refresh session for workload runtimes (admin)")]
     Open(AuthSessionOpenArgs),
+    #[command(about = "Rotate a refresh token (managed tokens refresh in place)")]
     Refresh(AuthSessionRefreshArgs),
+    #[command(about = "Close a refresh session")]
     Close(AuthSessionCloseArgs),
 }
 
 #[derive(Args)]
 struct AuthSessionOpenArgs {
-    #[arg(long)]
+    #[arg(long, help = "Agent id to open the session for")]
     agent: String,
-    #[arg(long, default_value = "fort-api")]
+    #[arg(long, default_value = "fort-api", help = "Token audience claim")]
     aud: String,
-    #[arg(long, default_value = "")]
+    #[arg(
+        long,
+        default_value = "",
+        help = "Access token lifetime, e.g. 3m (empty means server default)"
+    )]
     access_ttl: String,
-    #[arg(long, default_value = "")]
+    #[arg(
+        long,
+        default_value = "",
+        help = "Refresh session lifetime, e.g. 30m (empty means server default)"
+    )]
     refresh_ttl: String,
-    #[arg(long)]
+    #[arg(long, help = "0600 path the new refresh token is written to")]
     refresh_token_out: String,
 }
 
 #[derive(Args)]
 struct AuthSessionRefreshArgs {
-    #[arg(long)]
+    #[arg(long, help = "0600 file holding the current refresh token")]
     refresh_token_file: String,
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "0600 path for the rotated token (defaults to refreshing in place)"
+    )]
     refresh_token_out: Option<String>,
 }
 
 #[derive(Args)]
 struct AuthSessionCloseArgs {
-    #[arg(long, default_value = "")]
+    #[arg(long, default_value = "", help = "Session id to close")]
     session_id: String,
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "0600 file holding the session refresh token (sent with the close)"
+    )]
     refresh_token_file: Option<String>,
 }
 
@@ -305,36 +442,55 @@ struct AuthGithubCommand {
 
 #[derive(Subcommand)]
 enum AuthGithubSubcommand {
+    #[command(about = "Log this machine in with its GitHub PAT (prompt or file)")]
     Login(AuthGithubLoginArgs),
+    #[command(about = "Close the managed session and remove session files")]
     Logout,
+    #[command(about = "Enroll a machine PAT fingerprint for an agent (admin)")]
     Enroll(AuthGithubEnrollArgs),
+    #[command(about = "Revoke a machine login for an agent (admin)")]
     Unenroll(AuthGithubUnenrollArgs),
+    #[command(about = "List enrolled PAT fingerprints, never PATs (admin)")]
     List,
 }
 
 #[derive(Args)]
 struct AuthGithubLoginArgs {
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "0600 file holding the machine PAT (else prompt once and reuse the stored PAT)"
+    )]
     pat_file: Option<String>,
-    #[arg(long, default_value = "fort-api")]
+    #[arg(long, default_value = "fort-api", help = "Token audience claim")]
     aud: String,
-    #[arg(long, default_value = "")]
+    #[arg(
+        long,
+        default_value = "",
+        help = "Access token lifetime, e.g. 3m (empty means server default)"
+    )]
     access_ttl: String,
-    #[arg(long, default_value = "")]
+    #[arg(
+        long,
+        default_value = "",
+        help = "Refresh session lifetime, e.g. 30d (empty means server default)"
+    )]
     refresh_ttl: String,
 }
 
 #[derive(Args)]
 struct AuthGithubEnrollArgs {
-    #[arg(long)]
+    #[arg(long, help = "Agent id to bind the PAT fingerprint to")]
     agent: String,
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "0600 file holding the PAT to validate live and enroll by fingerprint"
+    )]
     pat_file: String,
 }
 
 #[derive(Args)]
 struct AuthGithubUnenrollArgs {
-    #[arg(long)]
+    #[arg(long, help = "Agent id whose machine login is revoked")]
     agent: String,
 }
 
@@ -346,58 +502,80 @@ struct AgentCommand {
 
 #[derive(Subcommand)]
 enum AgentSubcommand {
+    #[command(about = "Create an agent (admin)")]
     Create(AgentCreateArgs),
+    #[command(about = "Show one agent (admin)")]
     Get(AgentGetArgs),
+    #[command(about = "List agents (admin)")]
     List(AgentListArgs),
+    #[command(about = "Activate or disable an agent (admin)")]
     SetStatus(AgentSetStatusArgs),
+    #[command(about = "Rotate agent credentials, invalidating old tokens and sessions (admin)")]
     Rotate(AgentRotateArgs),
+    #[command(about = "Remove an agent (admin)")]
     Remove(AgentRemoveArgs),
+    #[command(about = "Manage agent policy bindings (admin)")]
     Policy(AgentPolicyCommand),
 }
 
 #[derive(Args)]
 struct AgentCreateArgs {
-    #[arg(long)]
+    #[arg(long, help = "Agent id to create")]
     id: String,
-    #[arg(long = "type", default_value = "workload")]
+    #[arg(
+        long = "type",
+        default_value = "workload",
+        help = "Agent type: workload, user, or ci"
+    )]
     agent_type: String,
-    #[arg(long, default_value = "active")]
+    #[arg(
+        long,
+        default_value = "active",
+        help = "Initial status: active or disabled"
+    )]
     status: String,
 }
 
 #[derive(Args)]
 struct AgentGetArgs {
-    #[arg(long)]
+    #[arg(long, help = "Agent id")]
     id: String,
 }
 
 #[derive(Args)]
 struct AgentListArgs {
-    #[arg(long = "type")]
+    #[arg(
+        long = "type",
+        help = "Only list this agent type: workload, user, or ci"
+    )]
     agent_type: Option<String>,
-    #[arg(long)]
+    #[arg(long, help = "Only list this status: active or disabled")]
     status: Option<String>,
 }
 
 #[derive(Args)]
 struct AgentSetStatusArgs {
-    #[arg(long)]
+    #[arg(long, help = "Agent id")]
     id: String,
-    #[arg(long)]
+    #[arg(long, help = "New status: active or disabled")]
     status: String,
 }
 
 #[derive(Args)]
 struct AgentRotateArgs {
-    #[arg(long)]
+    #[arg(long, help = "Agent id whose credentials are rotated")]
     id: String,
 }
 
 #[derive(Args)]
 struct AgentRemoveArgs {
-    #[arg(long)]
+    #[arg(long, help = "Agent id to remove")]
     id: String,
-    #[arg(long, default_value_t = false)]
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Force removal (reserved; removal never prompts today)"
+    )]
     force: bool,
 }
 
@@ -409,40 +587,56 @@ struct AgentPolicyCommand {
 
 #[derive(Subcommand)]
 enum AgentPolicySubcommand {
+    #[command(about = "Show an agent policy (admin)")]
     Get(AgentGetArgs),
+    #[command(about = "Replace an agent policy with new bindings (admin)")]
     Set(AgentPolicySetArgs),
+    #[command(about = "Add one binding to an agent policy (admin)")]
     Add(AgentPolicyAddRemoveArgs),
+    #[command(about = "Remove one binding from an agent policy (admin)")]
     Remove(AgentPolicyAddRemoveArgs),
+    #[command(about = "Check whether an agent may perform an operation (admin)")]
     Check(AgentPolicyCheckArgs),
 }
 
 #[derive(Args)]
 struct AgentPolicySetArgs {
-    #[arg(long)]
+    #[arg(long, help = "Agent id")]
     id: String,
-    #[arg(long = "bind", required = true)]
+    #[arg(
+        long = "bind",
+        required = true,
+        help = "Repeatable binding <repo|*>:<env|*>:<ops|*> with ops from get,set,run,list,batch-get ('*:*:*' is full access)"
+    )]
     binds: Vec<String>,
-    #[arg(long, default_value_t = true)]
+    #[arg(
+        long,
+        default_value_t = true,
+        help = "Replace the whole policy (reserved; set always replaces today)"
+    )]
     replace: bool,
 }
 
 #[derive(Args)]
 struct AgentPolicyAddRemoveArgs {
-    #[arg(long)]
+    #[arg(long, help = "Agent id")]
     id: String,
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Binding <repo|*>:<env|*>:<ops|*> with ops from get,set,run,list,batch-get"
+    )]
     bind: String,
 }
 
 #[derive(Args)]
 struct AgentPolicyCheckArgs {
-    #[arg(long)]
+    #[arg(long, help = "Agent id")]
     id: String,
-    #[arg(long)]
+    #[arg(long, help = "Policy repository scope, e.g. aureuma")]
     repo: String,
-    #[arg(long)]
+    #[arg(long, help = "Environment scope, e.g. dev or prod")]
     env: String,
-    #[arg(long)]
+    #[arg(long, help = "Operation to check: get, set, run, list, or batch-get")]
     op: String,
 }
 

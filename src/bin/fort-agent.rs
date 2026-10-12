@@ -4,25 +4,49 @@ use std::time::Duration;
 use clap::Parser;
 
 #[derive(Parser)]
-#[command(name = "fort-agent")]
+#[command(
+    name = "fort-agent",
+    about = "Keep a Fort access token fresh from a refresh-token file",
+    long_about = "Refresh loop for workload runtimes: reads a 0600 refresh-token file, mints short-lived access tokens, and writes the current one to --token-path. Host resolution: --host, FORT_HOST, ~/.fort/settings.toml [fort].host."
+)]
 struct Cli {
-    #[arg(long)]
+    #[arg(long, help = "Fort server base URL (https outside tests)")]
     host: Option<String>,
-    #[arg(long)]
+    #[arg(long, help = "0600 refresh-token file (else FORT_REFRESH_TOKEN_FILE)")]
     refresh_token_file: Option<String>,
-    #[arg(long, default_value = "/run/fort/access.token")]
+    #[arg(
+        long,
+        default_value = "/run/fort/access.token",
+        help = "Path the fresh access token is written to"
+    )]
     token_path: String,
-    #[arg(long, default_value_t = 0.70)]
+    #[arg(
+        long,
+        default_value_t = 0.70,
+        help = "Refresh when this fraction of the access-token lifetime has elapsed"
+    )]
     refresh_ratio: f64,
-    #[arg(long, default_value = "10s")]
+    #[arg(long, default_value = "10s", help = "Random sleep jitter, e.g. 10s")]
     jitter: String,
-    #[arg(long, default_value = "5s")]
+    #[arg(
+        long,
+        default_value = "5s",
+        help = "Minimum sleep between refreshes, e.g. 5s"
+    )]
     min_sleep: String,
-    #[arg(long, default_value = "30s")]
+    #[arg(
+        long,
+        default_value = "30s",
+        help = "Maximum backoff after failures, e.g. 30s"
+    )]
     max_backoff: String,
-    #[arg(long, default_value = "10s")]
+    #[arg(long, default_value = "10s", help = "HTTP request timeout, e.g. 10s")]
     http_timeout: String,
-    #[arg(long, default_value_t = false)]
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Refresh once and exit instead of looping"
+    )]
     once: bool,
 }
 
