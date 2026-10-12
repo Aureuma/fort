@@ -53,6 +53,33 @@ Rules:
 - `run` materializes secrets only for the child process lifetime. Prefer it
   over `get` when a command needs credentials.
 
+## Token rotation (npm)
+
+```bash
+fort rotate npm --repo <repo> --env <dev|prod> --token-key <KEY> \
+  --management-token-key <MGMT_KEY> [--password-key <PWD_KEY>] \
+  --otp-file /path/to/0600-otp --name <token-name> \
+  --package <pkg> | --scope <scope> | --org <org> | --all-packages \
+  [--revoke-old] [--dry-run] \
+  [--github-actions-repo Owner/repo --github-secret-name NPM_TOKEN \
+   --github-token-key <GH_KEY> [--github-token-repo <r> --github-token-env <e>]]
+```
+
+Rules:
+
+- Every npm input resolves through Fort: the publish token, the management
+  token, and the npm password key. Omit `--password-key` only when the
+  management credential accepts passwordless token creation.
+- `--otp-file` must be a `0600` file holding the current npm OTP. Use
+  `--revoke-otp-file` when revocation needs a fresher code than creation.
+- Run `--dry-run` first: it validates the command shape and sinks without
+  loading secret values.
+- Rotation order is create → store in Fort → update GitHub Actions secrets
+  → revoke old. The old token is revoked only after every configured sink
+  succeeds, so after a failed sink fix the sink and re-run instead of
+  revoking by hand.
+- Output never prints token values (JSON shows a redacted fingerprint only).
+
 ## Admin commands (admin token required)
 
 ```bash

@@ -23,8 +23,7 @@ type HmacSha256 = Hmac<Sha256>;
 /// Keyed by the server pepper so fingerprints from one Fort instance are
 /// meaningless elsewhere and cannot be brute-forced without the pepper.
 pub fn fingerprint_pat(pepper: &[u8], pat: &str) -> String {
-    let mut mac =
-        HmacSha256::new_from_slice(pepper).expect("hmac accepts any key length");
+    let mut mac = HmacSha256::new_from_slice(pepper).expect("hmac accepts any key length");
     mac.update(pat.trim().as_bytes());
     hex::encode(mac.finalize().into_bytes())
 }
@@ -85,17 +84,13 @@ fn verify_pat_inner(api_base: &str, pat: &str) -> Result<VerifyOutcome> {
         .get(&url)
         .bearer_auth(pat)
         .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
-        .header(
-            "User-Agent",
-            format!("fort/{}", env!("CARGO_PKG_VERSION")),
-        )
+        .header("User-Agent", format!("fort/{}", env!("CARGO_PKG_VERSION")))
         .send()
         .context("call github api")?;
     let status = response.status().as_u16();
     match status {
         200 => {
-            let user: GithubUserResponse =
-                response.json().context("decode github user")?;
+            let user: GithubUserResponse = response.json().context("decode github user")?;
             if user.login.trim().is_empty() {
                 return Ok(VerifyOutcome::Unavailable(
                     "github user response missing login".to_string(),

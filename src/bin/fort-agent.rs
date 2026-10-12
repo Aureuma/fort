@@ -41,9 +41,7 @@ fn run() -> anyhow::Result<()> {
         .filter(|value| !value.trim().is_empty())
         .unwrap_or_else(fort::hostcfg::host_from_settings);
     if host.trim().is_empty() {
-        anyhow::bail!(
-            "fort host is required (set FORT_HOST or ~/.fort/settings.toml [fort].host)"
-        );
+        anyhow::bail!("fort host is required (set FORT_HOST or ~/.fort/settings.toml [fort].host)");
     }
     let refresh_token_file = cli
         .refresh_token_file

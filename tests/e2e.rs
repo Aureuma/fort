@@ -448,7 +448,7 @@ fn fort_cli_rotates_npm_token_through_mock_registry() {
 
     let (registry_url, npm_mock) =
         start_mock_npm_registry(NpmMockMode::Password, "fort-e2e".to_string());
-    let (github_url, github_mock) = start_mock_github_actions_secret_api();
+    let (github_url, github_mock) = start_mock_github_actions_secret_api(false);
     let output = Command::new(&fort)
         .args([
             "--host",
@@ -502,6 +502,257 @@ fn fort_cli_rotates_npm_token_through_mock_registry() {
     npm_mock.join().expect("mock npm registry");
     github_mock.join().expect("mock github api");
 
+    let rotated = run_capture(
+        &fort,
+        &[
+            "--host",
+            &host,
+            "--token-file",
+            access_path.to_str().unwrap(),
+            "get",
+            "--repo",
+            "safe",
+            "--env",
+            "dev",
+            "--key",
+            "NPM_PUBLISH_TOKEN",
+            "--format",
+            "raw",
+        ],
+    );
+    assert_eq!(rotated.trim(), "npm_newtoken000000000000000000000000000000");
+
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+#[test]
+fn fort_cli_skips_npm_revoke_when_github_sink_fails() {
+    let temp = TempDir::new().expect("tempdir");
+    let state_dir = temp.path().join("state");
+    let safe_root = temp.path().join("safe");
+    let safe_repo = safe_root.join("safe");
+    fs::create_dir_all(&state_dir).expect("mkdir state");
+    fs::create_dir_all(&safe_repo).expect("mkdir safe");
+
+    let state_path = state_dir.join("state.json");
+    let keyring_path = state_dir.join("vault-keyring.json");
+    let signing_key_path = state_dir.join("jwt-signing.key");
+    let config_path = state_dir.join("fortd.toml");
+    let refresh_path = state_dir.join("npm.refresh");
+    let access_path = state_dir.join("npm.access");
+    let admin_token_path = state_dir.join("admin.token");
+    let otp_path = state_dir.join("npm.otp");
+
+    let admin_token = seed_state(&state_path, &keyring_path, &signing_key_path);
+    fs::write(&admin_token_path, admin_token.as_bytes()).expect("write admin token");
+    fs::write(&otp_path, b"123456\n").expect("write otp");
+    set_0600(&admin_token_path);
+    set_0600(&otp_path);
+
+    let addr = free_addr();
+    let fortd = std::env::var("CARGO_BIN_EXE_fortd").expect("fortd path");
+    let fort = std::env::var("CARGO_BIN_EXE_fort").expect("fort path");
+    let fort_agent = std::env::var("CARGO_BIN_EXE_fort-agent").expect("fort-agent path");
+    let host = format!("http://{addr}");
+    fs::write(
+        &config_path,
+        format!(
+            "addr = \"{addr}\"\nstate_path = \"{}\"\njwt_signing_key_file = \"{}\"\nsafe_root = \"{}\"\nvault_keyring_file = \"{}\"\ntoken_ttl = \"15m\"\nrefresh_session_ttl = \"30d\"\nrun_ttl = \"60s\"\nsecret_ttl = \"120s\"\n",
+            state_path.display(),
+            signing_key_path.display(),
+            safe_root.display(),
+            keyring_path.display(),
+        ),
+    )
+    .expect("write fortd config");
+
+    let mut child = Command::new(&fortd)
+        .args(["--config-file", config_path.to_str().expect("config path")])
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .expect("spawn fortd");
+    wait_for(Duration::from_secs(10), || {
+        Command::new(&fort)
+            .args([
+                "--host",
+                &host,
+                "--token-file",
+                admin_token_path.to_str().expect("admin token path"),
+                "doctor",
+            ])
+            .status()
+            .ok()
+            .is_some_and(|status| status.success())
+    });
+
+    run_ok(
+        &fort,
+        &[
+            "--host",
+            &host,
+            "--token-file",
+            admin_token_path.to_str().unwrap(),
+            "agent",
+            "create",
+            "--id",
+            "npm-rotator-sink-fail",
+            "--type",
+            "workload",
+        ],
+    );
+    run_ok(
+        &fort,
+        &[
+            "--host",
+            &host,
+            "--token-file",
+            admin_token_path.to_str().unwrap(),
+            "agent",
+            "policy",
+            "set",
+            "--id",
+            "npm-rotator-sink-fail",
+            "--bind",
+            "safe:dev:get,set",
+        ],
+    );
+    run_ok(
+        &fort,
+        &[
+            "--host",
+            &host,
+            "--token-file",
+            admin_token_path.to_str().unwrap(),
+            "auth",
+            "session",
+            "open",
+            "--agent",
+            "npm-rotator-sink-fail",
+            "--access-ttl",
+            "3m",
+            "--refresh-ttl",
+            "30m",
+            "--refresh-token-out",
+            refresh_path.to_str().unwrap(),
+        ],
+    );
+    set_0600(&refresh_path);
+    run_ok(
+        &fort_agent,
+        &[
+            "--once",
+            "--host",
+            &host,
+            "--refresh-token-file",
+            refresh_path.to_str().unwrap(),
+            "--token-path",
+            access_path.to_str().unwrap(),
+        ],
+    );
+    set_0600(&access_path);
+
+    for (key, value) in [
+        (
+            "NPM_PUBLISH_TOKEN",
+            "npm_oldtoken000000000000000000000000000000",
+        ),
+        (
+            "NPM_MANAGEMENT_TOKEN",
+            "npm_management00000000000000000000000000",
+        ),
+        ("NPM_PASSWORD", "npm-password"),
+        ("GITHUB_ACTIONS_TOKEN", "ghp_mockgithubtoken"),
+    ] {
+        run_ok(
+            &fort,
+            &[
+                "--host",
+                &host,
+                "--token-file",
+                access_path.to_str().unwrap(),
+                "set",
+                "--repo",
+                "safe",
+                "--env",
+                "dev",
+                "--key",
+                key,
+                "--value",
+                value,
+            ],
+        );
+    }
+
+    let (registry_url, npm_mock) =
+        start_mock_npm_registry_without_revoke("fort-e2e-sink-fail".to_string());
+    let (github_url, github_mock) = start_mock_github_actions_secret_api(true);
+    let output = Command::new(&fort)
+        .args([
+            "--host",
+            &host,
+            "--token-file",
+            access_path.to_str().unwrap(),
+            "--json",
+            "rotate",
+            "npm",
+            "--repo",
+            "safe",
+            "--env",
+            "dev",
+            "--token-key",
+            "NPM_PUBLISH_TOKEN",
+            "--management-token-key",
+            "NPM_MANAGEMENT_TOKEN",
+            "--password-key",
+            "NPM_PASSWORD",
+            "--otp-file",
+            otp_path.to_str().unwrap(),
+            "--name",
+            "fort-e2e-sink-fail",
+            "--all-packages",
+            "--bypass-2fa",
+            "--revoke-old",
+            "--registry",
+            &registry_url,
+            "--github-actions-repo",
+            "Aureuma/svelta-blog",
+            "--github-secret-name",
+            "NPM_TOKEN",
+            "--github-token-key",
+            "GITHUB_ACTIONS_TOKEN",
+            "--github-api-base",
+            &github_url,
+        ])
+        .output()
+        .expect("run npm rotation");
+    assert!(
+        !output.status.success(),
+        "npm rotation succeeded unexpectedly: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        combined.contains("github request failed (status=500)"),
+        "command output missing expected sink failure: combined={combined}",
+    );
+    assert!(
+        !combined.contains("npm_newtoken000000000000000000000000000000"),
+        "failure output leaked the new token: combined={combined}",
+    );
+    // The npm mock panics if a revoke DELETE arrives; joining it proves the
+    // old token was left alone after the sink failure.
+    npm_mock.join().expect("mock npm registry");
+    github_mock.join().expect("mock github api");
+
+    // Fort was already updated before the sink ran, so the new token is live
+    // in Fort while the old npm token stays valid for retry/rollback.
     let rotated = run_capture(
         &fort,
         &[
@@ -1232,6 +1483,8 @@ fn fort_cli_rejects_managed_refresh_token_rotation_to_detached_path() {
     fs::write(&refresh_path, "profile-refresh-token\n").expect("write profile refresh token");
     set_0600(&refresh_path);
     let out_path = temp.path().join("detached-refresh.token");
+    let empty_session_dir = temp.path().join("empty-session");
+    fs::create_dir_all(&empty_session_dir).expect("mkdir empty session dir");
     let fort = std::env::var("CARGO_BIN_EXE_fort").expect("fort path");
     let output = Command::new(fort)
         .args([
@@ -1245,6 +1498,10 @@ fn fort_cli_rejects_managed_refresh_token_rotation_to_detached_path() {
             "--refresh-token-out",
             out_path.to_str().expect("out path"),
         ])
+        .env("FORT_SESSION_DIR", &empty_session_dir)
+        .env_remove("FORT_HOST")
+        .env_remove("FORT_TOKEN_PATH")
+        .env_remove("FORT_BOOTSTRAP_TOKEN_FILE")
         .output()
         .expect("run fort refresh");
 
@@ -1958,7 +2215,52 @@ fn start_mock_npm_registry(
     (url, handle)
 }
 
-fn start_mock_github_actions_secret_api() -> (String, thread::JoinHandle<()>) {
+fn start_mock_npm_registry_without_revoke(token_name: String) -> (String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock npm");
+    let url = format!("http://{}", listener.local_addr().expect("mock addr"));
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept mock npm request");
+        let request = read_http_request(&mut stream);
+        let request_lower = request.to_ascii_lowercase();
+        assert!(request.starts_with("POST /-/npm/v1/tokens "));
+        assert!(request_lower.contains("authorization: bearer npm_management"));
+        assert!(request_lower.contains("npm-otp: 123456"));
+        assert!(request.contains(&format!("\"name\":\"{token_name}\"")));
+        assert!(request.contains("\"password\":\"npm-password\""));
+        let body = r#"{"key":"00000000-0000-4000-8000-000000000000","name":"fort-e2e","token":"npm_newtoken000000000000000000000000000000","expiry":"2026-09-08T00:00:00Z"}"#;
+        write!(
+            stream,
+            "HTTP/1.1 201 Created\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        )
+        .expect("write create response");
+        // The old token must never be revoked when a downstream sink fails.
+        // The CLI under test has already exited by the time this join
+        // completes, so any further connection here is a revoke attempt.
+        listener
+            .set_nonblocking(true)
+            .expect("nonblocking mock npm");
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            match listener.accept() {
+                Ok(_) => panic!("npm revoke must not run after a failed sink"),
+                Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                    if Instant::now() >= deadline {
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(10));
+                }
+                Err(err) => panic!("unexpected mock npm accept error: {err}"),
+            }
+        }
+    });
+    (url, handle)
+}
+
+fn start_mock_github_actions_secret_api(
+    fail_secret_update: bool,
+) -> (String, thread::JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock github");
     let url = format!(
         "http://{}",
@@ -1996,11 +2298,22 @@ fn start_mock_github_actions_secret_api() -> (String, thread::JoinHandle<()>) {
                 assert!(request.contains("\"key_id\":\"mock-key-id\""));
                 assert!(request.contains("\"encrypted_value\":"));
                 assert!(!request.contains("npm_newtoken000000000000000000000000000000"));
-                write!(
-                    stream,
-                    "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
-                )
-                .expect("write github secret response");
+                if fail_secret_update {
+                    let body = r#"{"message":"mock secret update failure"}"#;
+                    write!(
+                        stream,
+                        "HTTP/1.1 500 Internal Server Error\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                        body.len(),
+                        body
+                    )
+                    .expect("write github secret failure response");
+                } else {
+                    write!(
+                        stream,
+                        "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                    )
+                    .expect("write github secret response");
+                }
             }
         }
     });
@@ -2133,15 +2446,32 @@ fn fort_github_pat_login_roundtrip_through_mock_github() {
     run_ok(
         &fort,
         &[
-            "--host", &host, "--token-file", &admin, "agent", "create", "--id",
-            "machine-test", "--type", "workload",
+            "--host",
+            &host,
+            "--token-file",
+            &admin,
+            "agent",
+            "create",
+            "--id",
+            "machine-test",
+            "--type",
+            "workload",
         ],
     );
     run_ok(
         &fort,
         &[
-            "--host", &host, "--token-file", &admin, "agent", "policy", "set", "--id",
-            "machine-test", "--bind", "safe:dev:get,set,list,batch-get,run",
+            "--host",
+            &host,
+            "--token-file",
+            &admin,
+            "agent",
+            "policy",
+            "set",
+            "--id",
+            "machine-test",
+            "--bind",
+            "safe:dev:get,set,list,batch-get,run",
         ],
     );
     let enroll_out = run_capture(
@@ -2171,7 +2501,13 @@ fn fort_github_pat_login_roundtrip_through_mock_github() {
     let list_out = run_capture(
         &fort,
         &[
-            "--host", &host, "--token-file", &admin, "auth", "github", "list",
+            "--host",
+            &host,
+            "--token-file",
+            &admin,
+            "auth",
+            "github",
+            "list",
         ],
     );
     assert!(
@@ -2222,11 +2558,7 @@ fn fort_github_pat_login_roundtrip_through_mock_github() {
     }
 
     // The managed session works with no extra flags.
-    let whoami_out = run_capture_session(
-        &fort,
-        &["--host", &host, "auth", "whoami"],
-        &session_dir,
-    );
+    let whoami_out = run_capture_session(&fort, &["--host", &host, "auth", "whoami"], &session_dir);
     assert!(
         whoami_out.contains("machine-test"),
         "whoami output: {whoami_out}"
@@ -2286,15 +2618,29 @@ fn fort_github_pat_login_roundtrip_through_mock_github() {
     );
 
     // Logout closes the server session and removes local files.
-    run_ok_session(&fort, &["--host", &host, "auth", "github", "logout"], &session_dir);
+    run_ok_session(
+        &fort,
+        &["--host", &host, "auth", "github", "logout"],
+        &session_dir,
+    );
     assert!(!managed_access.exists(), "logout must remove access token");
-    assert!(!managed_refresh.exists(), "logout must remove refresh token");
+    assert!(
+        !managed_refresh.exists(),
+        "logout must remove refresh token"
+    );
 
     // After unenroll, the previously valid PAT no longer logs in.
     run_ok(
         &fort,
         &[
-            "--host", &host, "--token-file", &admin, "auth", "github", "unenroll", "--agent",
+            "--host",
+            &host,
+            "--token-file",
+            &admin,
+            "auth",
+            "github",
+            "unenroll",
+            "--agent",
             "machine-test",
         ],
     );
@@ -2489,15 +2835,32 @@ fn fort_github_login_prompts_and_stores_pat() {
     run_ok(
         &fort,
         &[
-            "--host", &host, "--token-file", &admin, "agent", "create", "--id",
-            "prompt-test", "--type", "workload",
+            "--host",
+            &host,
+            "--token-file",
+            &admin,
+            "agent",
+            "create",
+            "--id",
+            "prompt-test",
+            "--type",
+            "workload",
         ],
     );
     run_ok(
         &fort,
         &[
-            "--host", &host, "--token-file", &admin, "agent", "policy", "set", "--id",
-            "prompt-test", "--bind", "*:*:*",
+            "--host",
+            &host,
+            "--token-file",
+            &admin,
+            "agent",
+            "policy",
+            "set",
+            "--id",
+            "prompt-test",
+            "--bind",
+            "*:*:*",
         ],
     );
     run_ok(
@@ -2544,7 +2907,9 @@ fn fort_github_login_prompts_and_stores_pat() {
         .join("github.pat");
     assert!(stored_pat.exists(), "login must store the entered PAT");
     assert_eq!(
-        fs::read_to_string(&stored_pat).expect("read stored pat").trim(),
+        fs::read_to_string(&stored_pat)
+            .expect("read stored pat")
+            .trim(),
         "valid-test-pat"
     );
     #[cfg(unix)]

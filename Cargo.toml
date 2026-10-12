@@ -1,6 +1,6 @@
 [package]
 name = "fort"
-version = "1.0.8"
+version = "1.0.9"
 edition = "2024"
 rust-version = "1.94"
 license = "AGPL-3.0-only"

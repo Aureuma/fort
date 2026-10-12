@@ -1269,8 +1269,7 @@ impl Client {
         match command {
             AuthGithubSubcommand::Login(args) => {
                 require_pat_tls(&self.host)?;
-                let stored_path =
-                    stored_pat_path().context("resolve fort config directory")?;
+                let stored_path = stored_pat_path().context("resolve fort config directory")?;
                 let stored_path_str = stored_path.display().to_string();
                 let mut store_prompted = false;
                 let mut used_stored = false;
@@ -1292,12 +1291,8 @@ impl Client {
                 if !args.refresh_ttl.trim().is_empty() {
                     body["refresh_ttl"] = json!(args.refresh_ttl.trim());
                 }
-                let (status, response) = self.api_request(
-                    Method::POST,
-                    "/v1/auth/github/login",
-                    Some(body),
-                    false,
-                )?;
+                let (status, response) =
+                    self.api_request(Method::POST, "/v1/auth/github/login", Some(body), false)?;
                 match ensure_status(status, 200, &response) {
                     Ok(()) => {}
                     Err(err) if used_stored => {
@@ -1323,8 +1318,7 @@ impl Client {
                 if store_prompted {
                     write_secret_file(&stored_path_str, &pat).context("store entered PAT")?;
                 }
-                let session_dir =
-                    fort_session_dir().context("resolve fort session directory")?;
+                let session_dir = fort_session_dir().context("resolve fort session directory")?;
                 let access_path = session_dir.join("access.token").display().to_string();
                 let refresh_path = session_dir.join("refresh.token").display().to_string();
                 write_secret_file(&access_path, &access_token)?;
@@ -1352,8 +1346,8 @@ impl Client {
                 }
             }
             AuthGithubSubcommand::Logout => {
-                let refresh_path = managed_refresh_token_path()
-                    .context("resolve fort session directory")?;
+                let refresh_path =
+                    managed_refresh_token_path().context("resolve fort session directory")?;
                 if !Path::new(&refresh_path).exists() {
                     bail!("no managed session to close");
                 }
@@ -1424,17 +1418,16 @@ impl Client {
             }
             AuthGithubSubcommand::List => {
                 self.require_admin_token()?;
-                let (status, response) = self.api_request(
-                    Method::GET,
-                    "/v1/auth/github/fingerprints",
-                    None,
-                    true,
-                )?;
+                let (status, response) =
+                    self.api_request(Method::GET, "/v1/auth/github/fingerprints", None, true)?;
                 ensure_status(status, 200, &response)?;
                 if self.json {
                     print_json(&response)
                 } else {
-                    let entries = response["fingerprints"].as_array().cloned().unwrap_or_default();
+                    let entries = response["fingerprints"]
+                        .as_array()
+                        .cloned()
+                        .unwrap_or_default();
                     if entries.is_empty() {
                         println!("no enrolled fingerprints");
                     }

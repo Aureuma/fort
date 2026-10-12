@@ -352,10 +352,7 @@ impl Store {
         Ok(entry)
     }
 
-    pub fn get_pat_fingerprint(
-        &self,
-        fingerprint: &str,
-    ) -> Result<PatFingerprint, StoreError> {
+    pub fn get_pat_fingerprint(&self, fingerprint: &str) -> Result<PatFingerprint, StoreError> {
         self.refresh_from_disk_if_stale()
             .map_err(|_| StoreError::Invalid)?;
         self.state
@@ -367,10 +364,7 @@ impl Store {
             .ok_or(StoreError::NotFound)
     }
 
-    pub fn remove_pat_fingerprints_for_agent(
-        &self,
-        agent_id: &str,
-    ) -> Result<usize, StoreError> {
+    pub fn remove_pat_fingerprints_for_agent(&self, agent_id: &str) -> Result<usize, StoreError> {
         self.refresh_from_disk_if_stale()
             .map_err(|_| StoreError::Invalid)?;
         let agent_id = agent_id.trim();

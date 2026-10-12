@@ -95,8 +95,7 @@ impl Config {
             }
             _ => {}
         }
-        let (github_pepper_file, github_pepper) =
-            load_optional_pepper(&parsed.github_pepper_file)?;
+        let (github_pepper_file, github_pepper) = load_optional_pepper(&parsed.github_pepper_file)?;
         Ok(Self {
             addr: normalize_value(parsed.addr, ":8088"),
             state_path: normalize_value(parsed.state_path, "./fort-state.json"),
