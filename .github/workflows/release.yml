@@ -203,23 +203,42 @@ jobs:
     name: Update homebrew-fort tap formula
     needs: [resolve-tag, publish-assets]
     runs-on: ubuntu-latest
+    outputs:
+      enabled: ${{ steps.gate.outputs.enabled }}
+      token_source: ${{ steps.gate.outputs.token_source }}
     steps:
       - name: Check Homebrew tap token
         id: gate
         shell: bash
         env:
           HOMEBREW_TAP_PUSH_TOKEN: ${{ secrets.HOMEBREW_TAP_PUSH_TOKEN }}
+          GH_PAT_AUREUMA: ${{ secrets.GH_PAT_AUREUMA }}
         run: |
           set -euo pipefail
           if [[ "${{ needs.resolve-tag.outputs.publish }}" != "true" ]]; then
             echo "enabled=false" >> "${GITHUB_OUTPUT}"
             echo "Validation-only run; skipping Homebrew tap update."
-          elif [[ -z "${HOMEBREW_TAP_PUSH_TOKEN}" ]]; then
-            echo "enabled=false" >> "${GITHUB_OUTPUT}"
-            echo "HOMEBREW_TAP_PUSH_TOKEN is not configured; skipping tap update."
-          else
+          elif [[ -n "${HOMEBREW_TAP_PUSH_TOKEN}" ]]; then
             echo "enabled=true" >> "${GITHUB_OUTPUT}"
+            echo "token_source=HOMEBREW_TAP_PUSH_TOKEN" >> "${GITHUB_OUTPUT}"
+          elif [[ -n "${GH_PAT_AUREUMA}" ]]; then
+            echo "enabled=true" >> "${GITHUB_OUTPUT}"
+            echo "token_source=GH_PAT_AUREUMA" >> "${GITHUB_OUTPUT}"
+            echo "HOMEBREW_TAP_PUSH_TOKEN is not configured; falling back to GH_PAT_AUREUMA for Aureuma/homebrew-fort."
+          else
+            echo "enabled=false" >> "${GITHUB_OUTPUT}"
+            echo "Neither HOMEBREW_TAP_PUSH_TOKEN nor GH_PAT_AUREUMA is configured; skipping tap update."
           fi
+
+      - name: Checkout
+        if: steps.gate.outputs.enabled == 'true'
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve-tag.outputs.checkout_ref }}
+
+      - name: Setup Rust
+        if: steps.gate.outputs.enabled == 'true'
+        uses: dtolnay/rust-toolchain@1.94.0
 
       - name: Download verified release dist
         if: steps.gate.outputs.enabled == 'true'
@@ -232,23 +251,61 @@ jobs:
         if: steps.gate.outputs.enabled == 'true'
         env:
           HOMEBREW_TAP_PUSH_TOKEN: ${{ secrets.HOMEBREW_TAP_PUSH_TOKEN }}
+          GH_PAT_AUREUMA: ${{ secrets.GH_PAT_AUREUMA }}
         run: |
           set -euo pipefail
           tag="${{ needs.resolve-tag.outputs.tag }}"
           tmp_dir="$(mktemp -d)"
           trap 'rm -rf "${tmp_dir}"' EXIT
-          tap_dir="${tmp_dir}/homebrew-fort"
-          git clone "https://x-access-token:${HOMEBREW_TAP_PUSH_TOKEN}@github.com/Aureuma/homebrew-fort.git" "${tap_dir}"
-          git -C "${tap_dir}" config user.email "github-actions[bot]@users.noreply.github.com"
-          git -C "${tap_dir}" config user.name "github-actions[bot]"
-          (cd "${tap_dir}" && scripts/update-formula.sh --version "${tag}" --checksums "${GITHUB_WORKSPACE}/dist/checksums.txt")
-          git -C "${tap_dir}" add Formula/fort.rb VERSION
-          if git -C "${tap_dir}" diff --cached --quiet; then
-            echo "No formula changes"
-            exit 0
+
+          primary_token="${HOMEBREW_TAP_PUSH_TOKEN}"
+          fallback_token="${GH_PAT_AUREUMA}"
+          if [[ -z "${primary_token}" && -z "${fallback_token}" ]]; then
+            echo "tap push token resolved empty" >&2
+            exit 1
           fi
-          git -C "${tap_dir}" commit -m "chore: update fort formula to ${tag}"
-          git -C "${tap_dir}" push
+
+          tap_dir="${tmp_dir}/homebrew-fort"
+          clone_with_token() {
+            local token="$1"
+            [[ -n "${token}" ]] || return 1
+            rm -rf "${tap_dir}"
+            git clone "https://x-access-token:${token}@github.com/Aureuma/homebrew-fort.git" "${tap_dir}"
+            git -C "${tap_dir}" remote set-url origin "https://x-access-token:${token}@github.com/Aureuma/homebrew-fort.git"
+          }
+
+          run_tap_update() {
+            local token="$1"
+            clone_with_token "${token}"
+            git -C "${tap_dir}" config user.email "github-actions[bot]@users.noreply.github.com"
+            git -C "${tap_dir}" config user.name "github-actions[bot]"
+            cargo run --quiet --jobs 2 --locked --release --bin fort-release -- homebrew render-tap-formula \
+              --version "${tag}" \
+              --checksums dist/checksums.txt \
+              --tap-dir "${tap_dir}"
+            git -C "${tap_dir}" add Formula/fort.rb VERSION
+            if git -C "${tap_dir}" diff --cached --quiet; then
+              echo "No formula changes"
+              return 0
+            fi
+            git -C "${tap_dir}" commit -m "chore: update fort formula to ${tag}"
+            git -C "${tap_dir}" push
+          }
+
+          if [[ -n "${primary_token}" ]]; then
+            if run_tap_update "${primary_token}"; then
+              exit 0
+            fi
+            if [[ -n "${fallback_token}" && "${fallback_token}" != "${primary_token}" ]]; then
+              echo "Primary Homebrew token update failed; retrying with GH_PAT_AUREUMA fallback."
+              run_tap_update "${fallback_token}"
+              exit 0
+            fi
+            echo "Primary Homebrew token update failed and no distinct fallback token is available." >&2
+            exit 1
+          fi
+
+          run_tap_update "${fallback_token}"
 
   verify-release-distribution:
     name: Verify release assets and Homebrew tap
@@ -259,7 +316,6 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-          HOMEBREW_TAP_PUSH_TOKEN: ${{ secrets.HOMEBREW_TAP_PUSH_TOKEN }}
         run: |
           set -euo pipefail
 
@@ -307,13 +363,47 @@ jobs:
           done
           echo "release assets verified for ${tag}"
 
-          if [[ -n "${HOMEBREW_TAP_PUSH_TOKEN}" ]]; then
+          if [[ "${{ needs.update-homebrew-tap.outputs.enabled }}" == "true" ]]; then
             tap_url="https://raw.githubusercontent.com/Aureuma/homebrew-fort/main/Formula/fort.rb"
             if ! retry 12 10 bash -lc "curl --proto '=https' --tlsv1.2 -fsSL '${tap_url}' | grep -Eq 'version\\s+\"${version}\"'"; then
               echo "Homebrew tap formula did not update to ${version} after retries" >&2
               exit 1
             fi
-            echo "homebrew tap formula verified at version ${version}"
+            echo "homebrew tap formula verified at version ${version} (token: ${{ needs.update-homebrew-tap.outputs.token_source }})"
           else
-            echo "HOMEBREW_TAP_PUSH_TOKEN is not configured; skipping tap verification."
+            echo "Homebrew tap update was not enabled; skipping tap verification."
           fi
+
+  verify-homebrew-tap-install:
+    name: Verify real tap install (macOS)
+    needs: [resolve-tag, update-homebrew-tap, verify-release-distribution]
+    runs-on: macos-latest
+    steps:
+      - name: Install fort from the real tap
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ needs.resolve-tag.outputs.publish }}" != "true" ]]; then
+            echo "Validation-only run; skipping real tap install."
+            exit 0
+          fi
+          if [[ "${{ needs.update-homebrew-tap.outputs.enabled }}" != "true" ]]; then
+            echo "Homebrew tap update was not enabled; skipping real tap install."
+            exit 0
+          fi
+          tag="${{ needs.resolve-tag.outputs.tag }}"
+          version="${tag#v}"
+          brew untap aureuma/fort >/dev/null 2>&1 || true
+          brew tap aureuma/fort
+          if brew list fort >/dev/null 2>&1; then
+            brew reinstall aureuma/fort/fort
+          else
+            brew install aureuma/fort/fort
+          fi
+          reported="$(fort version)"
+          if [[ "${reported}" != "${version}" ]]; then
+            echo "tapped fort reports ${reported} but expected ${version}" >&2
+            exit 1
+          fi
+          brew test aureuma/fort/fort
+          echo "real tap install ok for ${tag}"

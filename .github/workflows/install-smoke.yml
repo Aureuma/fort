@@ -1,0 +1,85 @@
+name: Install Smoke
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: install-smoke-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_BUILD_JOBS: 2
+
+jobs:
+  rust-checks:
+    name: Rust checks (fmt, clippy, test)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@1.94.0
+        with:
+          components: rustfmt, clippy
+
+      - name: Run Rust format check
+        shell: bash
+        run: cargo fmt --all -- --check
+
+      - name: Run Rust clippy
+        shell: bash
+        run: cargo clippy --locked --all-targets --jobs 2 -- -D warnings
+
+      - name: Run Rust tests
+        shell: bash
+        run: cargo test --locked --jobs 2
+
+  host-smoke:
+    name: Host installer smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@1.94.0
+
+      - name: Run host installer smoke tests
+        shell: bash
+        run: cargo run --quiet --locked --jobs 2 --bin fort-release -- installer smoke-host
+
+  homebrew-smoke:
+    name: Homebrew render smoke (ubuntu)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@1.94.0
+
+      - name: Run Homebrew render smoke test
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n1)"
+          cargo run --quiet --locked --jobs 2 --bin fort-release -- self assets --out-dir .artifacts/smoke-dist
+          fake_dir="$(mktemp -d)"
+          trap 'rm -rf "${fake_dir}"' EXIT
+          for target in linux-amd64 linux-arm64 darwin-amd64 darwin-arm64; do
+            os="${target%%-*}"
+            arch="${target##*-}"
+            cp ".artifacts/smoke-dist/fort_${version}_linux_amd64.tar.gz" "${fake_dir}/fort_${version}_${os}_${arch}.tar.gz"
+          done
+          (cd "${fake_dir}" && sha256sum fort_*.tar.gz > checksums.txt)
+          cargo run --quiet --locked --jobs 2 --bin fort-release -- installer smoke-homebrew \
+            --version "${version}" \
+            --checksums "${fake_dir}/checksums.txt"

@@ -24,6 +24,11 @@ All notable changes to this project will be documented in this file.
 - Added the dev-only `fort-release` Rust helper: release version gate,
   local asset build/verify, host and Homebrew smokes, and tap formula
   rendering (byte-identical to the shell renderer it replaces).
+- Added an install-smoke CI workflow (format, clippy, tests, host smokes on
+  Linux and macOS, Homebrew render smoke) and a `fmt --check` gate in CI.
+- Changed the release pipeline to render the tap formula with
+  `fort-release` (with tap-token fallback) and to verify with a real
+  macOS tap install after publish.
 
 ### Fixed
 

@@ -18,7 +18,11 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@1.94.0
         with:
-          components: clippy
+          components: rustfmt, clippy
+
+      - name: Format
+        shell: bash
+        run: cargo fmt --all -- --check
 
       - name: Clippy
         shell: bash
