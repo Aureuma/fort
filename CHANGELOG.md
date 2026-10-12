@@ -13,6 +13,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [v1.1.0] - 2026-10-12
+
 ### Added
 
 - Added an e2e regression test proving the old npm token is left alone when a
@@ -26,6 +28,9 @@ All notable changes to this project will be documented in this file.
   rendering (byte-identical to the shell renderer it replaces).
 - Added an install-smoke CI workflow (format, clippy, tests, host smokes on
   Linux and macOS, Homebrew render smoke) and a `fmt --check` gate in CI.
+
+### Changed
+
 - Changed the release pipeline to render the tap formula with
   `fort-release` (with tap-token fallback) and to verify with a real
   macOS tap install after publish.
@@ -35,6 +40,8 @@ All notable changes to this project will be documented in this file.
 - Fixed the managed-refresh-rotation e2e test to isolate `FORT_SESSION_DIR`
   and `FORT_*` env so it no longer depends on the developer's live
   access-token expiry.
+- Fixed `fort-release` asset, verify, and smoke version flags to tolerate a
+  `v` prefix.
 
 ## [v1.0.8] - 2026-10-11
 

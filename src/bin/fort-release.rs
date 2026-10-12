@@ -184,6 +184,16 @@ fn canonical_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
 
+fn normalize_bare_version(raw: &str) -> String {
+    raw.trim().trim_start_matches('v').to_string()
+}
+
+fn resolve_bare_version(explicit: Option<String>) -> String {
+    explicit
+        .map(|raw| normalize_bare_version(&raw))
+        .unwrap_or_else(|| canonical_version().to_string())
+}
+
 fn parse_version_tag(tag: &str) -> Result<(u64, u64, u64)> {
     let nov = tag
         .trim()
@@ -303,10 +313,7 @@ fn sha256_file(path: &Path) -> Result<String> {
 }
 
 fn cmd_assets(args: &AssetsArgs) -> Result<()> {
-    let version = args
-        .version
-        .clone()
-        .unwrap_or_else(|| canonical_version().to_string());
+    let version = resolve_bare_version(args.version.clone());
     let (os, arch) = host_target()?;
     fs::create_dir_all(&args.out_dir)
         .with_context(|| format!("create {}", args.out_dir.display()))?;
@@ -370,10 +377,7 @@ fn cmd_assets(args: &AssetsArgs) -> Result<()> {
 }
 
 fn cmd_verify(args: &VerifyArgs) -> Result<()> {
-    let version = args
-        .version
-        .clone()
-        .unwrap_or_else(|| canonical_version().to_string());
+    let version = resolve_bare_version(args.version.clone());
     let checksums_path = args.out_dir.join("checksums.txt");
     let checksums_raw = fs::read_to_string(&checksums_path)
         .with_context(|| format!("read {}", checksums_path.display()))?;
@@ -606,10 +610,7 @@ fn brew_available() -> bool {
 }
 
 fn cmd_smoke_homebrew(args: &SmokeHomebrewArgs) -> Result<()> {
-    let version = args
-        .version
-        .clone()
-        .unwrap_or_else(|| canonical_version().to_string());
+    let version = resolve_bare_version(args.version.clone());
     let tag = format!("v{version}");
     parse_version_tag(&tag)?;
     let temp_tap = tempfile::tempdir().context("temp tap dir")?;
@@ -734,6 +735,13 @@ mod tests {
             "class Fort < Formula\n  desc \"Policy and authentication API for Vault secret operations\"\n  homepage \"https://github.com/Aureuma/fort\"\n  version \"9.9.9\"\n  license \"AGPL-3.0-only\"\n\n  on_macos do\n    if Hardware::CPU.arm?\n      url \"https://github.com/Aureuma/fort/releases/download/v9.9.9/fort_9.9.9_darwin_arm64.tar.gz\"\n      sha256 \"{a}\"\n    else\n      url \"https://github.com/Aureuma/fort/releases/download/v9.9.9/fort_9.9.9_darwin_amd64.tar.gz\"\n      sha256 \"{b}\"\n    end\n  end\n\n  on_linux do\n    if Hardware::CPU.arm?\n      url \"https://github.com/Aureuma/fort/releases/download/v9.9.9/fort_9.9.9_linux_arm64.tar.gz\"\n      sha256 \"{c}\"\n    elsif Hardware::CPU.intel?\n      url \"https://github.com/Aureuma/fort/releases/download/v9.9.9/fort_9.9.9_linux_amd64.tar.gz\"\n      sha256 \"{d}\"\n    end\n  end\n\n  def install\n    stage = buildpath/\"fort-stage\"\n    stage.mkpath\n    system \"tar\", \"-xzf\", cached_download, \"-C\", stage\n\n    binary = Dir[\"#{{stage}}/fort_*/fort\"].first\n    binary = (stage/\"fort\").to_s if binary.nil? && (stage/\"fort\").exist?\n    raise \"fort binary not found in release archive\" if binary.nil? || binary.empty?\n\n    bin.install binary => \"fort\"\n    chmod 0o755, bin/\"fort\"\n  end\n\n  test do\n    output = shell_output(\"#{{bin}}/fort version\")\n    assert_match version.to_s, output\n  end\nend\n"
         );
         assert_eq!(formula, expected);
+    }
+
+    #[test]
+    fn bare_version_tolerates_v_prefix() {
+        assert_eq!(normalize_bare_version("1.1.0"), "1.1.0");
+        assert_eq!(normalize_bare_version("v1.1.0"), "1.1.0");
+        assert_eq!(normalize_bare_version("  v1.1.0  "), "1.1.0");
     }
 
     #[test]
