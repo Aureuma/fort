@@ -426,8 +426,10 @@ fn cmd_verify(args: &VerifyArgs) -> Result<()> {
             &["-tzf", archive.to_str().context("archive path")?],
             None,
         )?;
-        if !members.lines().any(|line| line.trim() == "fort") {
-            bail!("{name} is missing the fort binary");
+        for bin in RELEASE_BINS {
+            if !members.lines().any(|line| line.trim() == bin) {
+                bail!("{name} is missing the {bin} binary");
+            }
         }
         let probe = tempfile::tempdir().context("probe dir")?;
         run_step(
@@ -536,7 +538,7 @@ fn render_formula(
     let asset_linux_arm64 = archive_name(version_nov, "linux", "arm64");
     let asset_linux_amd64 = archive_name(version_nov, "linux", "amd64");
     format!(
-        "class Fort < Formula\n  desc \"Policy and authentication API for Vault secret operations\"\n  homepage \"https://github.com/Aureuma/fort\"\n  version \"{version_nov}\"\n  license \"AGPL-3.0-only\"\n\n  on_macos do\n    if Hardware::CPU.arm?\n      url \"https://github.com/Aureuma/fort/releases/download/{version_tag}/{asset_darwin_arm64}\"\n      sha256 \"{sha_darwin_arm64}\"\n    else\n      url \"https://github.com/Aureuma/fort/releases/download/{version_tag}/{asset_darwin_amd64}\"\n      sha256 \"{sha_darwin_amd64}\"\n    end\n  end\n\n  on_linux do\n    if Hardware::CPU.arm?\n      url \"https://github.com/Aureuma/fort/releases/download/{version_tag}/{asset_linux_arm64}\"\n      sha256 \"{sha_linux_arm64}\"\n    elsif Hardware::CPU.intel?\n      url \"https://github.com/Aureuma/fort/releases/download/{version_tag}/{asset_linux_amd64}\"\n      sha256 \"{sha_linux_amd64}\"\n    end\n  end\n\n  def install\n    stage = buildpath/\"fort-stage\"\n    stage.mkpath\n    system \"tar\", \"-xzf\", cached_download, \"-C\", stage\n\n    binary = Dir[\"#{{stage}}/fort_*/fort\"].first\n    binary = (stage/\"fort\").to_s if binary.nil? && (stage/\"fort\").exist?\n    raise \"fort binary not found in release archive\" if binary.nil? || binary.empty?\n\n    bin.install binary => \"fort\"\n    chmod 0o755, bin/\"fort\"\n  end\n\n  test do\n    output = shell_output(\"#{{bin}}/fort version\")\n    assert_match version.to_s, output\n  end\nend\n"
+        "class Fort < Formula\n  desc \"Policy and authentication API for Vault secret operations\"\n  homepage \"https://github.com/Aureuma/fort\"\n  version \"{version_nov}\"\n  license \"AGPL-3.0-only\"\n\n  on_macos do\n    if Hardware::CPU.arm?\n      url \"https://github.com/Aureuma/fort/releases/download/{version_tag}/{asset_darwin_arm64}\"\n      sha256 \"{sha_darwin_arm64}\"\n    else\n      url \"https://github.com/Aureuma/fort/releases/download/{version_tag}/{asset_darwin_amd64}\"\n      sha256 \"{sha_darwin_amd64}\"\n    end\n  end\n\n  on_linux do\n    if Hardware::CPU.arm?\n      url \"https://github.com/Aureuma/fort/releases/download/{version_tag}/{asset_linux_arm64}\"\n      sha256 \"{sha_linux_arm64}\"\n    elsif Hardware::CPU.intel?\n      url \"https://github.com/Aureuma/fort/releases/download/{version_tag}/{asset_linux_amd64}\"\n      sha256 \"{sha_linux_amd64}\"\n    end\n  end\n\n  def install\n    stage = buildpath/\"fort-stage\"\n    stage.mkpath\n    system \"tar\", \"-xzf\", cached_download, \"-C\", stage\n\n    [\"fort\", \"fortd\", \"fort-agent\"].each do |name|\n      binary = Dir[\"#{{stage}}/fort_*/#{{name}}\"].first\n      binary = (stage/name).to_s if binary.nil? && (stage/name).exist?\n      raise \"#{{name}} binary not found in release archive\" if binary.nil? || binary.empty?\n\n      bin.install binary => name\n      chmod 0o755, bin/name\n    end\n  end\n\n  test do\n    output = shell_output(\"#{{bin}}/fort version\")\n    assert_match version.to_s, output\n    assert_predicate bin/\"fortd\", :executable?, \"fortd was not installed\"\n    assert_predicate bin/\"fort-agent\", :executable?, \"fort-agent was not installed\"\n  end\nend\n"
     )
 }
 
@@ -634,6 +636,15 @@ fn cmd_smoke_homebrew(args: &SmokeHomebrewArgs) -> Result<()> {
             bail!("rendered formula is missing {asset}");
         }
     }
+    if !rendered.contains("[\"fort\", \"fortd\", \"fort-agent\"].each") {
+        bail!("rendered formula does not install fort, fortd, and fort-agent");
+    }
+    for bin in ["fortd", "fort-agent"] {
+        let probe = format!("assert_predicate bin/\"{bin}\", :executable?");
+        if !rendered.contains(&probe) {
+            bail!("rendered formula test does not cover {bin}");
+        }
+    }
     println!("formula render ok for {tag}");
     if !args.install {
         if brew_available() {
@@ -692,6 +703,20 @@ fn cmd_smoke_homebrew(args: &SmokeHomebrewArgs) -> Result<()> {
             reported.trim()
         );
     }
+    for bin in ["fortd", "fort-agent"] {
+        let brewed_bin = Path::new(prefix.trim()).join(format!("bin/{bin}"));
+        if !brewed_bin.is_file() {
+            bail!("brewed {bin} missing at {}", brewed_bin.display());
+        }
+        let help = capture_step(
+            brewed_bin.to_str().context("brewed bin path")?,
+            &["--help"],
+            None,
+        )?;
+        if !help.contains("Usage:") {
+            bail!("brewed {bin} --help has no Usage line");
+        }
+    }
     run_step("brew", &["test", &qualified], None)?;
     match run_step("brew", &["untap", tap], None) {
         Ok(()) => {}
@@ -732,7 +757,7 @@ mod tests {
             "d".repeat(64),
         );
         let expected = format!(
-            "class Fort < Formula\n  desc \"Policy and authentication API for Vault secret operations\"\n  homepage \"https://github.com/Aureuma/fort\"\n  version \"9.9.9\"\n  license \"AGPL-3.0-only\"\n\n  on_macos do\n    if Hardware::CPU.arm?\n      url \"https://github.com/Aureuma/fort/releases/download/v9.9.9/fort_9.9.9_darwin_arm64.tar.gz\"\n      sha256 \"{a}\"\n    else\n      url \"https://github.com/Aureuma/fort/releases/download/v9.9.9/fort_9.9.9_darwin_amd64.tar.gz\"\n      sha256 \"{b}\"\n    end\n  end\n\n  on_linux do\n    if Hardware::CPU.arm?\n      url \"https://github.com/Aureuma/fort/releases/download/v9.9.9/fort_9.9.9_linux_arm64.tar.gz\"\n      sha256 \"{c}\"\n    elsif Hardware::CPU.intel?\n      url \"https://github.com/Aureuma/fort/releases/download/v9.9.9/fort_9.9.9_linux_amd64.tar.gz\"\n      sha256 \"{d}\"\n    end\n  end\n\n  def install\n    stage = buildpath/\"fort-stage\"\n    stage.mkpath\n    system \"tar\", \"-xzf\", cached_download, \"-C\", stage\n\n    binary = Dir[\"#{{stage}}/fort_*/fort\"].first\n    binary = (stage/\"fort\").to_s if binary.nil? && (stage/\"fort\").exist?\n    raise \"fort binary not found in release archive\" if binary.nil? || binary.empty?\n\n    bin.install binary => \"fort\"\n    chmod 0o755, bin/\"fort\"\n  end\n\n  test do\n    output = shell_output(\"#{{bin}}/fort version\")\n    assert_match version.to_s, output\n  end\nend\n"
+            "class Fort < Formula\n  desc \"Policy and authentication API for Vault secret operations\"\n  homepage \"https://github.com/Aureuma/fort\"\n  version \"9.9.9\"\n  license \"AGPL-3.0-only\"\n\n  on_macos do\n    if Hardware::CPU.arm?\n      url \"https://github.com/Aureuma/fort/releases/download/v9.9.9/fort_9.9.9_darwin_arm64.tar.gz\"\n      sha256 \"{a}\"\n    else\n      url \"https://github.com/Aureuma/fort/releases/download/v9.9.9/fort_9.9.9_darwin_amd64.tar.gz\"\n      sha256 \"{b}\"\n    end\n  end\n\n  on_linux do\n    if Hardware::CPU.arm?\n      url \"https://github.com/Aureuma/fort/releases/download/v9.9.9/fort_9.9.9_linux_arm64.tar.gz\"\n      sha256 \"{c}\"\n    elsif Hardware::CPU.intel?\n      url \"https://github.com/Aureuma/fort/releases/download/v9.9.9/fort_9.9.9_linux_amd64.tar.gz\"\n      sha256 \"{d}\"\n    end\n  end\n\n  def install\n    stage = buildpath/\"fort-stage\"\n    stage.mkpath\n    system \"tar\", \"-xzf\", cached_download, \"-C\", stage\n\n    [\"fort\", \"fortd\", \"fort-agent\"].each do |name|\n      binary = Dir[\"#{{stage}}/fort_*/#{{name}}\"].first\n      binary = (stage/name).to_s if binary.nil? && (stage/name).exist?\n      raise \"#{{name}} binary not found in release archive\" if binary.nil? || binary.empty?\n\n      bin.install binary => name\n      chmod 0o755, bin/name\n    end\n  end\n\n  test do\n    output = shell_output(\"#{{bin}}/fort version\")\n    assert_match version.to_s, output\n    assert_predicate bin/\"fortd\", :executable?, \"fortd was not installed\"\n    assert_predicate bin/\"fort-agent\", :executable?, \"fort-agent was not installed\"\n  end\nend\n"
         );
         assert_eq!(formula, expected);
     }

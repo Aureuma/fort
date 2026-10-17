@@ -24,6 +24,9 @@ All notable changes to this project will be documented in this file.
 ### Fixed
 
 - Fixed a stale hard-coded checkout path in the README local-run example.
+- Fixed the Homebrew formula installing only `fort`: brew installs now ship
+  `fort`, `fortd`, and `fort-agent` from the release archives, and release
+  verification asserts all three binaries.
 
 ## [v1.1.0] - 2026-10-12
 
