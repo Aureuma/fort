@@ -13,6 +13,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [v1.2.0] - 2026-10-19
+
 ### Added
 
 - Added README install instructions (Homebrew tap plus release archives)
