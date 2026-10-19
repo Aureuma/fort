@@ -27,6 +27,10 @@ All notable changes to this project will be documented in this file.
 - Fixed the Homebrew formula installing only `fort`: brew installs now ship
   `fort`, `fortd`, and `fort-agent` from the release archives, and release
   verification asserts all three binaries.
+- Fixed `auth github login`, `auth github logout`, and `auth session
+  refresh` failing with `refresh managed session` when the managed session
+  on disk was already dead; these commands no longer require a live session
+  first.
 
 ## [v1.1.0] - 2026-10-12
 

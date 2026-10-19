@@ -648,8 +648,31 @@ pub fn run() -> Result<()> {
         return cmd_version(cli.json);
     }
     let mut client = Client::new(cli.host, cli.token_file, cli.json)?;
-    client.ensure_fresh_managed_token()?;
+    if !skips_managed_refresh(&cli.command) {
+        client.ensure_fresh_managed_token()?;
+    }
     client.run(cli.command)
+}
+
+/// Commands that establish, replace, or rotate session credentials run
+/// without a pre-flight managed refresh: they never send the managed bearer
+/// token, so refreshing first can only wedge them when the session on disk
+/// is dead. Session close keeps the refresh because close-by-id
+/// authenticates with the managed token.
+fn skips_managed_refresh(command: &FortCommand) -> bool {
+    let FortCommand::Auth(command) = command else {
+        return false;
+    };
+    match &command.command {
+        AuthSubcommand::Session(command) => {
+            matches!(command.command, AuthSessionSubcommand::Refresh(_))
+        }
+        AuthSubcommand::Github(command) => matches!(
+            command.command,
+            AuthGithubSubcommand::Login(_) | AuthGithubSubcommand::Logout
+        ),
+        _ => false,
+    }
 }
 
 fn cmd_version(json: bool) -> Result<()> {
@@ -2961,6 +2984,56 @@ mod tests {
             github_token_repo: None,
             github_token_env: None,
             github_api_base: "https://api.github.com".to_string(),
+        }
+    }
+
+    #[test]
+    fn session_bootstrap_commands_skip_managed_refresh() {
+        for argv in [
+            vec!["fort", "auth", "github", "login"],
+            vec!["fort", "auth", "github", "logout"],
+            vec![
+                "fort",
+                "auth",
+                "session",
+                "refresh",
+                "--refresh-token-file",
+                "/tmp/worker.refresh",
+            ],
+        ] {
+            let cli = FortCli::try_parse_from(argv).expect("parse");
+            assert!(skips_managed_refresh(&cli.command));
+        }
+        for argv in [
+            vec!["fort", "auth", "whoami"],
+            vec!["fort", "auth", "list"],
+            vec![
+                "fort",
+                "auth",
+                "session",
+                "open",
+                "--agent",
+                "a",
+                "--refresh-token-out",
+                "/tmp/o",
+            ],
+            vec!["fort", "auth", "session", "close"],
+            vec![
+                "fort",
+                "auth",
+                "github",
+                "enroll",
+                "--agent",
+                "a",
+                "--pat-file",
+                "/tmp/p",
+            ],
+            vec!["fort", "auth", "github", "list"],
+            vec!["fort", "doctor"],
+            vec!["fort", "get", "--repo", "r", "--env", "e", "--key", "k"],
+        ] {
+            let cli = FortCli::try_parse_from(argv).expect("parse");
+            assert!(!skips_managed_refresh(&cli.command));
         }
     }
 }

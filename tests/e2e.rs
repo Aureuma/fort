@@ -3143,3 +3143,159 @@ fn flag_row_has_inline_help(body: &str) -> bool {
     }
     !rest.is_empty()
 }
+
+#[test]
+fn fort_github_login_succeeds_with_dead_managed_session() {
+    let temp = TempDir::new().expect("tempdir");
+    let state_dir = temp.path().join("state");
+    let safe_root = temp.path().join("safe");
+    let safe_repo = safe_root.join("safe");
+    fs::create_dir_all(&state_dir).expect("mkdir state");
+    fs::create_dir_all(&safe_repo).expect("mkdir safe");
+
+    let state_path = state_dir.join("state.json");
+    let keyring_path = state_dir.join("vault-keyring.json");
+    let signing_key_path = state_dir.join("jwt-signing.key");
+    let pepper_path = state_dir.join("github-pepper");
+    let config_path = state_dir.join("fortd.toml");
+    let admin_token_path = state_dir.join("admin.token");
+    let pat_path = state_dir.join("machine.pat");
+    let session_dir = temp.path().join("session");
+    fs::create_dir_all(&session_dir).expect("mkdir session");
+
+    let admin_token = seed_state(&state_path, &keyring_path, &signing_key_path);
+    fs::write(&admin_token_path, admin_token.as_bytes()).expect("write admin token");
+    set_0600(&admin_token_path);
+    fs::write(&pepper_path, "test-pepper-that-is-long-enough-32").expect("write pepper");
+    set_0600(&pepper_path);
+    fs::write(&pat_path, "valid-test-pat\n").expect("write pat");
+    set_0600(&pat_path);
+
+    // enroll + login = 2 GitHub calls.
+    let (github_base, github_handle) = start_mock_github_user_api(2);
+
+    let addr = free_addr();
+    let fortd = std::env::var("CARGO_BIN_EXE_fortd").expect("fortd path");
+    let fort = std::env::var("CARGO_BIN_EXE_fort").expect("fort path");
+    let host = format!("http://{addr}");
+    fs::write(
+        &config_path,
+        format!(
+            "addr = \"{addr}\"\nstate_path = \"{}\"\njwt_signing_key_file = \"{}\"\nsafe_root = \"{}\"\nvault_keyring_file = \"{}\"\ntoken_ttl = \"15m\"\nrefresh_session_ttl = \"30d\"\nrun_ttl = \"60s\"\nsecret_ttl = \"120s\"\ngithub_pepper_file = \"{}\"\ngithub_api_base = \"{}\"\n",
+            state_path.display(),
+            signing_key_path.display(),
+            safe_root.display(),
+            keyring_path.display(),
+            pepper_path.display(),
+            github_base,
+        ),
+    )
+    .expect("write fortd config");
+
+    let mut child = Command::new(&fortd)
+        .args(["--config-file", config_path.to_str().expect("config path")])
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .expect("spawn fortd");
+    wait_for(Duration::from_secs(10), || {
+        Command::new(&fort)
+            .args([
+                "--host",
+                &host,
+                "--token-file",
+                admin_token_path.to_str().expect("admin token path"),
+                "doctor",
+            ])
+            .status()
+            .ok()
+            .is_some_and(|status| status.success())
+    });
+
+    let admin = admin_token_path.to_str().unwrap().to_string();
+    run_ok(
+        &fort,
+        &[
+            "--host",
+            &host,
+            "--token-file",
+            &admin,
+            "agent",
+            "create",
+            "--id",
+            "dead-session-test",
+            "--type",
+            "workload",
+        ],
+    );
+    run_ok(
+        &fort,
+        &[
+            "--host",
+            &host,
+            "--token-file",
+            &admin,
+            "agent",
+            "policy",
+            "set",
+            "--id",
+            "dead-session-test",
+            "--bind",
+            "*:*:*",
+        ],
+    );
+    run_ok(
+        &fort,
+        &[
+            "--host",
+            &host,
+            "--token-file",
+            &admin,
+            "auth",
+            "github",
+            "enroll",
+            "--agent",
+            "dead-session-test",
+            "--pat-file",
+            pat_path.to_str().unwrap(),
+        ],
+    );
+
+    // Poison the managed session: an unparseable access token forces a
+    // refresh attempt, and the dead refresh token makes the server reject
+    // it. Login must not trip over this; it replaces the session.
+    let dead_access = session_dir.join("access.token");
+    let dead_refresh = session_dir.join("refresh.token");
+    fs::write(&dead_access, "invalid-token\n").expect("write dead access");
+    set_0600(&dead_access);
+    fs::write(&dead_refresh, "dead-refresh-token\n").expect("write dead refresh");
+    set_0600(&dead_refresh);
+
+    let login = run_capture_session(
+        &fort,
+        &[
+            "--host",
+            &host,
+            "auth",
+            "github",
+            "login",
+            "--pat-file",
+            pat_path.to_str().unwrap(),
+        ],
+        &session_dir,
+    );
+    assert!(
+        login.contains("logged in as dead-session-test"),
+        "login output: {login}"
+    );
+
+    let whoami = run_capture_session(&fort, &["--host", &host, "auth", "whoami"], &session_dir);
+    assert!(
+        whoami.contains("dead-session-test"),
+        "whoami output: {whoami}"
+    );
+
+    github_handle.join().expect("join mock github");
+    let _ = child.kill();
+    let _ = child.wait();
+}
