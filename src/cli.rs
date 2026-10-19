@@ -1,11 +1,13 @@
 use std::collections::BTreeMap;
 use std::env;
-use std::fs;
+use std::fs::{self, OpenOptions};
 use std::io::{self, Write};
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+use std::os::unix::io::AsRawFd;
 use std::path::{Component, Path, PathBuf};
 use std::process::Command;
-use std::time::Duration;
+use std::thread;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail};
 use base64::{
@@ -725,6 +727,15 @@ impl Client {
         if !self.token.trim().is_empty() && !token_needs_refresh(&self.token) {
             return Ok(());
         }
+        // Serialize refreshers across processes: the server treats a
+        // second POST of the same refresh token as reuse compromise and
+        // revokes the session.
+        let _refresh_lock = lock_managed_refresh(&refresh_path)?;
+        if let Some(fresh) = read_fresh_managed_access_token() {
+            self.token = fresh;
+            self.managed = true;
+            return Ok(());
+        }
         let refresh_token =
             read_secret_file(&refresh_path).context("read managed refresh token")?;
         let (status, response) = self.api_request(
@@ -981,6 +992,7 @@ impl Client {
                     Path::new(&args.refresh_token_file),
                     Path::new(&out_path),
                 )?;
+                let _managed_lock = lock_if_managed_refresh(&args.refresh_token_file)?;
                 let refresh_token = read_secret_file(&args.refresh_token_file)?;
                 let (status, mut response) = self.api_request(
                     Method::POST,
@@ -2232,6 +2244,101 @@ fn managed_refresh_token_path() -> Option<String> {
     fort_session_dir().map(|dir| dir.join("refresh.token").display().to_string())
 }
 
+const MANAGED_REFRESH_LOCK_FILE: &str = ".refresh.lock";
+const MANAGED_REFRESH_LOCK_POLL: Duration = Duration::from_millis(5);
+const MANAGED_REFRESH_LOCK_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Exclusive cross-process guard for one managed refresh cycle. The kernel
+/// releases the underlying flock when the holder exits, so a crashed holder
+/// can delay waiters but never wedge them.
+struct ManagedRefreshLock {
+    _file: fs::File,
+}
+
+impl Drop for ManagedRefreshLock {
+    fn drop(&mut self) {
+        unsafe {
+            libc::flock(self._file.as_raw_fd(), libc::LOCK_UN);
+        }
+    }
+}
+
+fn managed_refresh_lock_path(refresh_token_path: &str) -> PathBuf {
+    Path::new(refresh_token_path)
+        .parent()
+        .map(|dir| dir.join(MANAGED_REFRESH_LOCK_FILE))
+        .unwrap_or_else(|| PathBuf::from(MANAGED_REFRESH_LOCK_FILE))
+}
+
+fn try_lock_managed_refresh(refresh_token_path: &str) -> Result<Option<ManagedRefreshLock>> {
+    let lock_path = managed_refresh_lock_path(refresh_token_path);
+    let file = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .mode(0o600)
+        .open(&lock_path)
+        .with_context(|| format!("open refresh lock {}", lock_path.display()))?;
+    if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+        return Ok(Some(ManagedRefreshLock { _file: file }));
+    }
+    match io::Error::last_os_error().kind() {
+        io::ErrorKind::WouldBlock => Ok(None),
+        _ => Err(anyhow!(
+            "lock refresh lock {}: {}",
+            lock_path.display(),
+            io::Error::last_os_error()
+        )),
+    }
+}
+
+fn lock_managed_refresh(refresh_token_path: &str) -> Result<ManagedRefreshLock> {
+    let start = Instant::now();
+    loop {
+        if let Some(guard) = try_lock_managed_refresh(refresh_token_path)? {
+            return Ok(guard);
+        }
+        if start.elapsed() >= MANAGED_REFRESH_LOCK_TIMEOUT {
+            bail!("timed out waiting for managed refresh lock");
+        }
+        thread::sleep(MANAGED_REFRESH_LOCK_POLL);
+    }
+}
+
+/// Lock the managed session when an explicit refresh targets the managed
+/// refresh file, so it serializes against implicit refreshes. Detached
+/// runtime files stay single-owner and unlocked.
+fn lock_if_managed_refresh(refresh_token_file: &str) -> Result<Option<ManagedRefreshLock>> {
+    let Some(managed) = managed_refresh_token_path() else {
+        return Ok(None);
+    };
+    let same = normalize_path_components(PathBuf::from(&managed))
+        == normalize_path_components(PathBuf::from(refresh_token_file))
+        || is_managed_refresh_token_path(Path::new(refresh_token_file));
+    if same {
+        Ok(Some(lock_managed_refresh(&managed)?))
+    } else {
+        Ok(None)
+    }
+}
+
+/// Re-read the managed access token after acquiring the refresh lock. When
+/// another process refreshed while this one waited, the caller adopts that
+/// token instead of POSTing a second refresh.
+fn read_fresh_managed_access_token() -> Option<String> {
+    let path = managed_access_token_path()?;
+    read_fresh_access_token(&path)
+}
+
+fn read_fresh_access_token(access_path: &str) -> Option<String> {
+    let token = read_secret_file(access_path).ok()?;
+    if token.trim().is_empty() || token_needs_refresh(&token) {
+        None
+    } else {
+        Some(token)
+    }
+}
+
 fn stored_pat_path() -> Option<PathBuf> {
     let session_dir = fort_session_dir()?;
     match session_dir.parent() {
@@ -3035,5 +3142,79 @@ mod tests {
             let cli = FortCli::try_parse_from(argv).expect("parse");
             assert!(!skips_managed_refresh(&cli.command));
         }
+    }
+
+    #[test]
+    fn managed_refresh_lock_is_exclusive_across_handles() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let refresh = dir.path().join("refresh.token");
+        fs::write(&refresh, "token\n").expect("write refresh");
+        let path = refresh.display().to_string();
+
+        let guard = try_lock_managed_refresh(&path)
+            .expect("lock")
+            .expect("first hold succeeds");
+        assert!(
+            try_lock_managed_refresh(&path)
+                .expect("re-lock attempt")
+                .is_none(),
+            "second hold must fail while locked"
+        );
+        drop(guard);
+        assert!(
+            try_lock_managed_refresh(&path)
+                .expect("lock after release")
+                .is_some(),
+            "hold must succeed after release"
+        );
+    }
+
+    #[test]
+    fn managed_refresh_lock_serializes_threads() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let refresh = dir.path().join("refresh.token");
+        fs::write(&refresh, "token\n").expect("write refresh");
+        let path = refresh.display().to_string();
+        let holder_path = path.clone();
+        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        let held = thread::spawn(move || {
+            let _guard = lock_managed_refresh(&holder_path).expect("blocking hold");
+            tx.send(()).expect("signal hold");
+            thread::sleep(Duration::from_millis(150));
+        });
+        rx.recv().expect("wait for hold");
+        assert!(
+            try_lock_managed_refresh(&path)
+                .expect("contended try")
+                .is_none(),
+            "try-lock must fail while another thread holds"
+        );
+        held.join().expect("join holder");
+        assert!(
+            try_lock_managed_refresh(&path)
+                .expect("lock after join")
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn fresh_managed_access_is_adopted_without_refresh() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let now = Utc::now().timestamp();
+        let access = dir.path().join("access.token");
+        fs::write(&access, test_jwt(Some(now + 3600))).expect("write fresh");
+        fs::set_permissions(&access, fs::Permissions::from_mode(0o600)).expect("chmod");
+        let path = access.display().to_string();
+        let adopted = read_fresh_access_token(&path).expect("adopt fresh");
+        assert!(adopted.starts_with("h."));
+
+        fs::write(&access, test_jwt(Some(now - 60))).expect("write stale");
+        assert!(read_fresh_access_token(&path).is_none());
+
+        fs::write(&access, "invalid-token").expect("write garbage");
+        assert!(read_fresh_access_token(&path).is_none());
+
+        let missing = dir.path().join("missing.token").display().to_string();
+        assert!(read_fresh_access_token(&missing).is_none());
     }
 }

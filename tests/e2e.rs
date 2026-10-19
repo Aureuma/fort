@@ -3299,3 +3299,150 @@ fn fort_github_login_succeeds_with_dead_managed_session() {
     let _ = child.kill();
     let _ = child.wait();
 }
+
+#[test]
+fn fort_concurrent_managed_bootstrap_keeps_session_alive() {
+    let temp = TempDir::new().expect("tempdir");
+    let state_dir = temp.path().join("state");
+    let safe_root = temp.path().join("safe");
+    let safe_repo = safe_root.join("safe");
+    fs::create_dir_all(&state_dir).expect("mkdir state");
+    fs::create_dir_all(&safe_repo).expect("mkdir safe");
+
+    let state_path = state_dir.join("state.json");
+    let keyring_path = state_dir.join("vault-keyring.json");
+    let signing_key_path = state_dir.join("jwt-signing.key");
+    let config_path = state_dir.join("fortd.toml");
+    let admin_token_path = state_dir.join("admin.token");
+    let provisioned_refresh = state_dir.join("provisioned.refresh");
+    let managed_dir = temp.path().join("session");
+    fs::create_dir_all(&managed_dir).expect("mkdir session");
+    let managed_access = managed_dir.join("access.token");
+    let managed_refresh = managed_dir.join("refresh.token");
+
+    let admin_token = seed_state(&state_path, &keyring_path, &signing_key_path);
+    fs::write(&admin_token_path, admin_token.as_bytes()).expect("write admin token");
+    set_0600(&admin_token_path);
+
+    let addr = free_addr();
+    let fortd = std::env::var("CARGO_BIN_EXE_fortd").expect("fortd path");
+    let fort = std::env::var("CARGO_BIN_EXE_fort").expect("fort path");
+    let host = format!("http://{addr}");
+    fs::write(
+        &config_path,
+        format!(
+            "addr = \"{addr}\"\nstate_path = \"{}\"\njwt_signing_key_file = \"{}\"\nsafe_root = \"{}\"\nvault_keyring_file = \"{}\"\ntoken_ttl = \"15m\"\nrefresh_session_ttl = \"30d\"\nrun_ttl = \"60s\"\nsecret_ttl = \"120s\"\n",
+            state_path.display(),
+            signing_key_path.display(),
+            safe_root.display(),
+            keyring_path.display(),
+        ),
+    )
+    .expect("write fortd config");
+
+    let mut child = Command::new(&fortd)
+        .args(["--config-file", config_path.to_str().expect("config path")])
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .expect("spawn fortd");
+    wait_for(Duration::from_secs(10), || {
+        Command::new(&fort)
+            .args([
+                "--host",
+                &host,
+                "--token-file",
+                admin_token_path.to_str().expect("admin token path"),
+                "doctor",
+            ])
+            .status()
+            .ok()
+            .is_some_and(|status| status.success())
+    });
+
+    let admin = admin_token_path.to_str().unwrap().to_string();
+    run_ok(
+        &fort,
+        &[
+            "--host",
+            &host,
+            "--token-file",
+            &admin,
+            "agent",
+            "create",
+            "--id",
+            "conc-test",
+            "--type",
+            "workload",
+        ],
+    );
+    run_ok(
+        &fort,
+        &[
+            "--host",
+            &host,
+            "--token-file",
+            &admin,
+            "agent",
+            "policy",
+            "set",
+            "--id",
+            "conc-test",
+            "--bind",
+            "*:*:*",
+        ],
+    );
+    run_ok(
+        &fort,
+        &[
+            "--host",
+            &host,
+            "--token-file",
+            &admin,
+            "auth",
+            "session",
+            "open",
+            "--agent",
+            "conc-test",
+            "--refresh-token-out",
+            provisioned_refresh.to_str().unwrap(),
+        ],
+    );
+    fs::copy(&provisioned_refresh, &managed_refresh).expect("install refresh");
+    set_0600(&managed_refresh);
+
+    // Drop the access token so every worker bootstraps through a refresh.
+    // Unserialized refreshes would POST the same refresh token and the
+    // server would revoke the session as reuse compromise.
+    for _ in 0..3 {
+        let _ = fs::remove_file(&managed_access);
+        let mut handles = Vec::new();
+        for _ in 0..8 {
+            let (fort, host, managed) = (fort.clone(), host.clone(), managed_dir.clone());
+            handles.push(thread::spawn(move || {
+                let output = Command::new(&fort)
+                    .args(["--host", host.as_str(), "auth", "whoami"])
+                    .env("FORT_SESSION_DIR", &managed)
+                    .env_remove("FORT_TOKEN_PATH")
+                    .env_remove("FORT_BOOTSTRAP_TOKEN_FILE")
+                    .output()
+                    .expect("run whoami");
+                assert!(
+                    output.status.success(),
+                    "concurrent whoami failed: stdout={} stderr={}",
+                    String::from_utf8_lossy(&output.stdout),
+                    String::from_utf8_lossy(&output.stderr)
+                );
+            }));
+        }
+        for handle in handles {
+            handle.join().expect("join worker");
+        }
+    }
+
+    let whoami = run_capture_session(&fort, &["--host", &host, "auth", "whoami"], &managed_dir);
+    assert!(whoami.contains("conc-test"), "whoami output: {whoami}");
+
+    let _ = child.kill();
+    let _ = child.wait();
+}

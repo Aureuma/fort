@@ -31,6 +31,9 @@ All notable changes to this project will be documented in this file.
   refresh` failing with `refresh managed session` when the managed session
   on disk was already dead; these commands no longer require a live session
   first.
+- Fixed concurrent `fort` processes revoking the managed session: refreshes
+  are now serialized with a session lockfile, so simultaneous refreshes no
+  longer look like token-reuse compromise to the server.
 
 ## [v1.1.0] - 2026-10-12
 
