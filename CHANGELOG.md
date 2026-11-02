@@ -11,7 +11,7 @@ All notable changes to this project will be documented in this file.
 - Every commit bumps PATCH in the same commit; only `vX.Y.0` minor tags are
   published as GitHub Releases (see `docs/RELEASING.md`).
 
-## [Unreleased]
+## [1.3.0] - 2026-11-02
 
 ## [v1.2.0] - 2026-10-19
 
