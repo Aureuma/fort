@@ -13,12 +13,18 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [v1.4.0] - 2026-11-16
+
 ### Added
 
 - Added Fort-managed R2 temporary-credential issuance (`fort r2 issue`)
   backed by a long-lived issuer token in the safe. Callers get
   short-lived, bucket-scoped S3 credentials (7-day TTL cap) without ever
   seeing the issuer token.
+
+### Changed
+
+- Raised the default refresh session lifetime from 30 days to 90 days.
 
 ## [1.3.0] - 2026-11-02
 
