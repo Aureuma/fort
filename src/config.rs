@@ -28,6 +28,23 @@ pub struct Config {
     pub github_pepper_file: Option<String>,
     pub github_pepper: Vec<u8>,
     pub github_api_base: String,
+    pub r2: R2Config,
+}
+
+#[derive(Clone, Debug)]
+pub struct R2Config {
+    pub api_base: String,
+    pub account_id: String,
+    pub issuer_repo: String,
+    pub issuer_env: String,
+    pub issuer_token_key: String,
+}
+
+impl R2Config {
+    /// The issuer is only active once an account id and issuer token key are set.
+    pub fn enabled(&self) -> bool {
+        !self.account_id.trim().is_empty() && !self.issuer_token_key.trim().is_empty()
+    }
 }
 
 impl Config {
@@ -73,6 +90,13 @@ impl Config {
                 "FORT_GITHUB_API_BASE",
                 crate::github_auth::DEFAULT_GITHUB_API_BASE,
             ),
+            r2: R2Config {
+                api_base: env_or("FORT_R2_API_BASE", crate::r2::DEFAULT_R2_API_BASE),
+                account_id: env_or("FORT_R2_ACCOUNT_ID", ""),
+                issuer_repo: env_or("FORT_R2_ISSUER_REPO", ""),
+                issuer_env: env_or("FORT_R2_ISSUER_ENV", ""),
+                issuer_token_key: env_or("FORT_R2_ISSUER_TOKEN_KEY", ""),
+            },
         })
     }
 
@@ -122,6 +146,13 @@ impl Config {
                 parsed.github_api_base,
                 crate::github_auth::DEFAULT_GITHUB_API_BASE,
             ),
+            r2: R2Config {
+                api_base: normalize_value(parsed.r2_api_base, crate::r2::DEFAULT_R2_API_BASE),
+                account_id: normalize_value(parsed.r2_account_id, ""),
+                issuer_repo: normalize_value(parsed.r2_issuer_repo, ""),
+                issuer_env: normalize_value(parsed.r2_issuer_env, ""),
+                issuer_token_key: normalize_value(parsed.r2_issuer_token_key, ""),
+            },
         })
     }
 }
@@ -152,6 +183,16 @@ struct FileConfig {
     github_pepper_file: String,
     #[serde(default)]
     github_api_base: String,
+    #[serde(default)]
+    r2_api_base: String,
+    #[serde(default)]
+    r2_account_id: String,
+    #[serde(default)]
+    r2_issuer_repo: String,
+    #[serde(default)]
+    r2_issuer_env: String,
+    #[serde(default)]
+    r2_issuer_token_key: String,
 }
 
 pub fn env_trim(name: &str) -> String {
