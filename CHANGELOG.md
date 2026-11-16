@@ -11,6 +11,15 @@ All notable changes to this project will be documented in this file.
 - Every commit bumps PATCH in the same commit; only `vX.Y.0` minor tags are
   published as GitHub Releases (see `docs/RELEASING.md`).
 
+## [Unreleased]
+
+### Added
+
+- Added Fort-managed R2 temporary-credential issuance (`fort r2 issue`)
+  backed by a long-lived issuer token in the safe. Callers get
+  short-lived, bucket-scoped S3 credentials (7-day TTL cap) without ever
+  seeing the issuer token.
+
 ## [1.3.0] - 2026-11-02
 
 ## [v1.2.0] - 2026-10-19

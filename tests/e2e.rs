@@ -3446,3 +3446,298 @@ fn fort_concurrent_managed_bootstrap_keeps_session_alive() {
     let _ = child.kill();
     let _ = child.wait();
 }
+
+fn start_mock_r2_issuer() -> (String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock r2");
+    let url = format!("http://{}", listener.local_addr().expect("mock addr"));
+    let handle = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("accept mock r2 request");
+        let request = read_http_request(&mut stream);
+        let request_lower = request.to_ascii_lowercase();
+        assert!(
+            request.starts_with("POST /accounts/test-account/r2/temp-access-credentials "),
+            "unexpected r2 request: {request}"
+        );
+        assert!(request_lower.contains("authorization: bearer r2_issuer_token"));
+        assert!(request.contains("\"bucket\":\"ly-restic\""));
+        assert!(request.contains("\"parentAccessKeyId\":\"r2_parent_access_key\""));
+        assert!(request.contains("\"permission\":\"object-read-only\""));
+        assert!(request.contains("\"ttlSeconds\":600"));
+        let body = r#"{"success":true,"errors":[],"messages":[],"result":{"accessKeyId":"r2_temp_access_key","secretAccessKey":"r2_temp_secret","sessionToken":"r2_temp_session"}}"#;
+        write!(
+            stream,
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        )
+        .expect("write r2 response");
+    });
+    (url, handle)
+}
+
+#[test]
+fn fort_cli_issues_r2_temp_credentials_through_mock_cloudflare() {
+    let temp = TempDir::new().expect("tempdir");
+    let state_dir = temp.path().join("state");
+    let safe_root = temp.path().join("safe");
+    let safe_repo = safe_root.join("safe");
+    fs::create_dir_all(&state_dir).expect("mkdir state");
+    fs::create_dir_all(&safe_repo).expect("mkdir safe");
+
+    let state_path = state_dir.join("state.json");
+    let keyring_path = state_dir.join("vault-keyring.json");
+    let signing_key_path = state_dir.join("jwt-signing.key");
+    let config_path = state_dir.join("fortd.toml");
+    let admin_token_path = state_dir.join("admin.token");
+    let refresh_path = state_dir.join("r2.refresh");
+    let access_path = state_dir.join("r2.access");
+
+    let admin_token = seed_state(&state_path, &keyring_path, &signing_key_path);
+    fs::write(&admin_token_path, admin_token.as_bytes()).expect("write admin token");
+    set_0600(&admin_token_path);
+
+    let (r2_base, r2_mock) = start_mock_r2_issuer();
+
+    let addr = free_addr();
+    let fortd = std::env::var("CARGO_BIN_EXE_fortd").expect("fortd path");
+    let fort = std::env::var("CARGO_BIN_EXE_fort").expect("fort path");
+    let fort_agent = std::env::var("CARGO_BIN_EXE_fort-agent").expect("fort-agent path");
+    let host = format!("http://{addr}");
+    fs::write(
+        &config_path,
+        format!(
+            "addr = \"{addr}\"\nstate_path = \"{}\"\njwt_signing_key_file = \"{}\"\nsafe_root = \"{}\"\nvault_keyring_file = \"{}\"\ntoken_ttl = \"15m\"\nrefresh_session_ttl = \"30d\"\nrun_ttl = \"60s\"\nsecret_ttl = \"120s\"\nr2_api_base = \"{r2_base}\"\nr2_account_id = \"test-account\"\nr2_issuer_repo = \"infra\"\nr2_issuer_env = \"prod\"\nr2_issuer_token_key = \"R2_ISSUER_TOKEN\"\n",
+            state_path.display(),
+            signing_key_path.display(),
+            safe_root.display(),
+            keyring_path.display(),
+        ),
+    )
+    .expect("write fortd config");
+
+    let mut child = Command::new(&fortd)
+        .args(["--config-file", config_path.to_str().expect("config path")])
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .expect("spawn fortd");
+    wait_for(Duration::from_secs(10), || {
+        Command::new(&fort)
+            .args([
+                "--host",
+                &host,
+                "--token-file",
+                admin_token_path.to_str().expect("admin token path"),
+                "doctor",
+            ])
+            .status()
+            .ok()
+            .is_some_and(|status| status.success())
+    });
+
+    for (repo, env) in [("infra", "prod"), ("r2b", "prod")] {
+        run_ok(
+            &fort,
+            &[
+                "--host",
+                &host,
+                "--token-file",
+                admin_token_path.to_str().unwrap(),
+                "scope",
+                "ensure",
+                "--repo",
+                repo,
+                "--env",
+                env,
+            ],
+        );
+    }
+    run_ok(
+        &fort,
+        &[
+            "--host",
+            &host,
+            "--token-file",
+            admin_token_path.to_str().unwrap(),
+            "set",
+            "--repo",
+            "infra",
+            "--env",
+            "prod",
+            "--key",
+            "R2_ISSUER_TOKEN",
+            "--value",
+            "r2_issuer_token",
+        ],
+    );
+    run_ok(
+        &fort,
+        &[
+            "--host",
+            &host,
+            "--token-file",
+            admin_token_path.to_str().unwrap(),
+            "set",
+            "--repo",
+            "r2b",
+            "--env",
+            "prod",
+            "--key",
+            "PARENT_KEY",
+            "--value",
+            "r2_parent_access_key",
+        ],
+    );
+
+    run_ok(
+        &fort,
+        &[
+            "--host",
+            &host,
+            "--token-file",
+            admin_token_path.to_str().unwrap(),
+            "r2",
+            "issue",
+            "--bucket",
+            "ly-restic",
+            "--permission",
+            "object-read-only",
+            "--ttl-seconds",
+            "600",
+            "--parent-repo",
+            "r2b",
+            "--parent-env",
+            "prod",
+            "--parent-key",
+            "PARENT_KEY",
+            "--dry-run",
+        ],
+    );
+
+    let output = run_capture(
+        &fort,
+        &[
+            "--host",
+            &host,
+            "--token-file",
+            admin_token_path.to_str().unwrap(),
+            "r2",
+            "issue",
+            "--bucket",
+            "ly-restic",
+            "--permission",
+            "object-read-only",
+            "--ttl-seconds",
+            "600",
+            "--parent-repo",
+            "r2b",
+            "--parent-env",
+            "prod",
+            "--parent-key",
+            "PARENT_KEY",
+        ],
+    );
+    assert!(
+        output.contains("access_key_id=r2_temp_access_key"),
+        "missing access key in output: {output}"
+    );
+    assert!(
+        output.contains("secret_access_key=r2_temp_secret"),
+        "missing secret key in output: {output}"
+    );
+    assert!(
+        output.contains("session_token=r2_temp_session"),
+        "missing session token in output: {output}"
+    );
+
+    run_ok(
+        &fort,
+        &[
+            "--host",
+            &host,
+            "--token-file",
+            admin_token_path.to_str().unwrap(),
+            "agent",
+            "create",
+            "--id",
+            "r2-client",
+            "--type",
+            "workload",
+        ],
+    );
+    run_ok(
+        &fort,
+        &[
+            "--host",
+            &host,
+            "--token-file",
+            admin_token_path.to_str().unwrap(),
+            "auth",
+            "session",
+            "open",
+            "--agent",
+            "r2-client",
+            "--access-ttl",
+            "3m",
+            "--refresh-ttl",
+            "30m",
+            "--refresh-token-out",
+            refresh_path.to_str().unwrap(),
+        ],
+    );
+    set_0600(&refresh_path);
+    run_ok(
+        &fort_agent,
+        &[
+            "--once",
+            "--host",
+            &host,
+            "--refresh-token-file",
+            refresh_path.to_str().unwrap(),
+            "--token-path",
+            access_path.to_str().unwrap(),
+        ],
+    );
+    set_0600(&access_path);
+
+    let denied = Command::new(&fort)
+        .args([
+            "--host",
+            &host,
+            "--token-file",
+            access_path.to_str().unwrap(),
+            "r2",
+            "issue",
+            "--bucket",
+            "ly-restic",
+            "--permission",
+            "object-read-only",
+            "--ttl-seconds",
+            "600",
+            "--parent-repo",
+            "r2b",
+            "--parent-env",
+            "prod",
+            "--parent-key",
+            "PARENT_KEY",
+        ])
+        .output()
+        .expect("run denied r2 issue");
+    assert!(
+        !denied.status.success(),
+        "r2 issue should be forbidden for an unscoped agent"
+    );
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&denied.stdout),
+        String::from_utf8_lossy(&denied.stderr)
+    );
+    assert!(
+        combined.contains("forbidden"),
+        "missing forbidden in denied output: {combined}"
+    );
+
+    r2_mock.join().expect("join mock r2");
+    child.kill().expect("kill fortd");
+    child.wait().expect("wait fortd");
+}

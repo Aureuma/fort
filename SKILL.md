@@ -80,6 +80,24 @@ Rules:
   revoking by hand.
 - Output never prints token values (JSON shows a redacted fingerprint only).
 
+## Temporary R2 credentials (r2 issue)
+
+```bash
+fort r2 issue --bucket <name> --permission object-read-only|object-read-write|admin-read-only|admin-read-write \
+  --ttl-seconds 3600 [--prefix p/ --object path/to/file] \
+  --parent-repo <repo> --parent-env <dev|prod> --parent-key <KEY> [--dry-run]
+```
+
+Rules:
+
+- The caller needs `get` on both the configured issuer scope and the
+  parent-key scope. Temp credentials never exceed the parent token.
+- Run `--dry-run` first: it validates policy and shape without calling
+  Cloudflare.
+- Credentials print to stdout as `key=value` lines (pipe to the
+  consumer); metadata goes to stderr. TTL caps at 604800 (7 days).
+- The issuer token itself stays in the safe and is never printed.
+
 ## Admin commands (admin token required)
 
 ```bash

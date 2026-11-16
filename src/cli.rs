@@ -74,10 +74,60 @@ enum FortCommand {
     Run(RunArgs),
     #[command(about = "Rotate third-party provider credentials")]
     Rotate(Box<RotateCommand>),
+    #[command(about = "Issue temporary R2 credentials through the Fort-managed issuer")]
+    R2(R2Command),
     #[command(about = "Manage agents and policies (admin)")]
     Agent(AgentCommand),
 }
 
+#[derive(Args)]
+struct R2Command {
+    #[command(subcommand)]
+    command: R2Subcommand,
+}
+
+#[derive(Subcommand)]
+enum R2Subcommand {
+    #[command(about = "Issue a temporary bucket-scoped R2 S3 credential")]
+    Issue(R2IssueArgs),
+}
+
+#[derive(Args)]
+struct R2IssueArgs {
+    #[arg(long, help = "R2 bucket name, e.g. ly-restic")]
+    bucket: String,
+    #[arg(
+        long,
+        help = "Permission: admin-read-write, admin-read-only, object-read-write, or object-read-only"
+    )]
+    permission: String,
+    #[arg(
+        long,
+        default_value_t = 3600,
+        help = "Credential lifetime in seconds (max 604800)"
+    )]
+    ttl_seconds: u64,
+    #[arg(
+        long = "prefix",
+        action = clap::ArgAction::Append,
+        help = "Restrict access to an object prefix (repeatable)"
+    )]
+    prefixes: Vec<String>,
+    #[arg(
+        long = "object",
+        action = clap::ArgAction::Append,
+        help = "Restrict access to an exact object path (repeatable)"
+    )]
+    objects: Vec<String>,
+    #[arg(long, help = "Policy repository scope of the parent R2 access key")]
+    parent_repo: String,
+    #[arg(long, help = "Policy environment scope of the parent R2 access key")]
+    parent_env: String,
+    #[arg(long, help = "Fort key holding the parent R2 access key ID")]
+    parent_key: String,
+    #[arg(long, help = "Validate policy and shape without calling Cloudflare")]
+    dry_run: bool,
+}
 #[derive(Args)]
 struct GetArgs {
     #[arg(long, help = "Policy repository scope, e.g. aureuma")]
@@ -776,6 +826,7 @@ impl Client {
             FortCommand::Scope(command) => self.cmd_scope(command.command),
             FortCommand::Run(args) => self.cmd_run(args),
             FortCommand::Rotate(command) => self.cmd_rotate(command.command),
+            FortCommand::R2(command) => self.cmd_r2(command.command),
             FortCommand::Agent(command) => self.cmd_agent(command.command),
         }
     }
@@ -1083,6 +1134,67 @@ impl Client {
             println!("{}", response["value"].as_str().unwrap_or_default());
             Ok(())
         }
+    }
+
+    fn cmd_r2(&self, command: R2Subcommand) -> Result<()> {
+        match command {
+            R2Subcommand::Issue(args) => self.cmd_r2_issue(args),
+        }
+    }
+
+    fn cmd_r2_issue(&self, args: R2IssueArgs) -> Result<()> {
+        let (status, response) = self.api_request(
+            Method::POST,
+            "/v1/r2/temp-credentials",
+            Some(json!({
+                "bucket": args.bucket,
+                "permission": args.permission,
+                "ttl_seconds": args.ttl_seconds,
+                "prefixes": args.prefixes,
+                "objects": args.objects,
+                "parent_repo": args.parent_repo,
+                "parent_env": args.parent_env,
+                "parent_key": args.parent_key,
+                "dry_run": args.dry_run
+            })),
+            true,
+        )?;
+        ensure_status(status, 200, &response)?;
+        if self.json {
+            return print_json(&response);
+        }
+        if args.dry_run {
+            println!(
+                "dry-run ok: bucket={} permission={} ttl={}s parent={}/{}/{}",
+                response["bucket"].as_str().unwrap_or_default(),
+                response["permission"].as_str().unwrap_or_default(),
+                response["ttl_seconds"].as_u64().unwrap_or_default(),
+                response["parent_repo"].as_str().unwrap_or_default(),
+                response["parent_env"].as_str().unwrap_or_default(),
+                response["parent_key"].as_str().unwrap_or_default()
+            );
+            return Ok(());
+        }
+        println!(
+            "access_key_id={}",
+            response["access_key_id"].as_str().unwrap_or_default()
+        );
+        println!(
+            "secret_access_key={}",
+            response["secret_access_key"].as_str().unwrap_or_default()
+        );
+        println!(
+            "session_token={}",
+            response["session_token"].as_str().unwrap_or_default()
+        );
+        eprintln!(
+            "# bucket={} permission={} ttl={}s expires_at={}",
+            response["bucket"].as_str().unwrap_or_default(),
+            response["permission"].as_str().unwrap_or_default(),
+            response["ttl_seconds"].as_u64().unwrap_or_default(),
+            response["expires_at"].as_str().unwrap_or_default()
+        );
+        Ok(())
     }
 
     fn cmd_set(&self, args: SetArgs) -> Result<()> {
