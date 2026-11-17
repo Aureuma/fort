@@ -13,6 +13,14 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Added the unified `fort keys <verb> <provider>` command family for
+  provider credential lifecycle: `issue`, `create`, `rotate`,
+  `revoke`, `list`, and `audit`, starting with the `r2` provider
+  (`npm` rotation moved under `keys rotate` too). The old `fort r2`
+  and `fort rotate` spellings remain as deprecated aliases.
+
 ## [v1.4.0] - 2026-11-16
 
 ### Added

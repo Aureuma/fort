@@ -72,10 +72,12 @@ enum FortCommand {
     Scope(ScopeCommand),
     #[command(about = "Run a child command with secrets materialized")]
     Run(RunArgs),
-    #[command(about = "Rotate third-party provider credentials")]
+    #[command(hide = true, about = "Deprecated alias of: keys rotate <provider>")]
     Rotate(Box<RotateCommand>),
-    #[command(about = "Issue temporary R2 credentials through the Fort-managed issuer")]
+    #[command(hide = true, about = "Deprecated alias of: keys issue r2")]
     R2(R2Command),
+    #[command(about = "Issue, create, rotate, revoke, list, and audit provider credentials")]
+    Keys(KeysCommand),
     #[command(about = "Manage agents and policies (admin)")]
     Agent(AgentCommand),
 }
@@ -128,6 +130,324 @@ struct R2IssueArgs {
     #[arg(long, help = "Validate policy and shape without calling Cloudflare")]
     dry_run: bool,
 }
+
+#[derive(Args)]
+struct KeysCommand {
+    #[command(subcommand)]
+    command: KeysSubcommand,
+}
+
+#[derive(Subcommand)]
+enum KeysSubcommand {
+    #[command(about = "Mint a short-lived credential")]
+    Issue(KeysIssueCommand),
+    #[command(about = "Mint a long-lived credential into Fort")]
+    Create(KeysCreateCommand),
+    #[command(about = "Rotate a Fort-held credential")]
+    Rotate(KeysRotateCommand),
+    #[command(about = "Revoke a provider credential")]
+    Revoke(KeysRevokeCommand),
+    #[command(about = "List live provider credentials (never values)")]
+    List(KeysListCommand),
+    #[command(about = "Reconcile live provider credentials against Fort")]
+    Audit(KeysAuditCommand),
+}
+
+#[derive(Args)]
+struct KeysIssueCommand {
+    #[command(subcommand)]
+    command: KeysIssueProvider,
+}
+
+#[derive(Subcommand)]
+enum KeysIssueProvider {
+    #[command(about = "Issue a temporary bucket-scoped R2 S3 credential")]
+    R2(R2IssueArgs),
+}
+
+#[derive(Args)]
+struct KeysCreateCommand {
+    #[command(subcommand)]
+    command: KeysCreateProvider,
+}
+
+#[derive(Subcommand)]
+enum KeysCreateProvider {
+    #[command(about = "Create a least-privilege R2 object token and store its S3 pair in Fort")]
+    R2(R2CreateArgs),
+}
+
+#[derive(Args)]
+struct KeysRotateCommand {
+    #[command(subcommand)]
+    command: KeysRotateProvider,
+}
+
+#[derive(Subcommand)]
+enum KeysRotateProvider {
+    #[command(about = "Rotate an R2 object token through Fort")]
+    R2(Box<R2RotateArgs>),
+    #[command(about = "Rotate an npm granular access token through Fort")]
+    Npm(Box<NpmRotateArgs>),
+}
+
+#[derive(Args)]
+struct KeysRevokeCommand {
+    #[command(subcommand)]
+    command: KeysRevokeProvider,
+}
+
+#[derive(Subcommand)]
+enum KeysRevokeProvider {
+    #[command(about = "Delete a Cloudflare account token")]
+    R2(R2RevokeArgs),
+}
+
+#[derive(Args)]
+struct KeysListCommand {
+    #[command(subcommand)]
+    command: KeysListProvider,
+}
+
+#[derive(Subcommand)]
+enum KeysListProvider {
+    #[command(about = "List live Cloudflare account tokens (never values)")]
+    R2(R2ListArgs),
+}
+
+#[derive(Args)]
+struct KeysAuditCommand {
+    #[command(subcommand)]
+    command: KeysAuditProvider,
+}
+
+#[derive(Subcommand)]
+enum KeysAuditProvider {
+    #[command(about = "Match live Cloudflare account tokens against Fort-held access key IDs")]
+    R2(R2AuditArgs),
+}
+
+#[derive(Args)]
+struct R2CreateArgs {
+    #[arg(long, help = "Name for the new Cloudflare token")]
+    name: String,
+    #[arg(
+        long = "bucket",
+        action = clap::ArgAction::Append,
+        help = "Repeatable: R2 bucket the token may access"
+    )]
+    buckets: Vec<String>,
+    #[arg(
+        long,
+        default_value = "object-read-write",
+        help = "Permission: object-read-write or object-read-only"
+    )]
+    permission: String,
+    #[arg(long, help = "Cloudflare account ID")]
+    account_id: String,
+    #[arg(long, help = "Policy repository scope receiving the S3 pair")]
+    repo: String,
+    #[arg(long, help = "Environment scope receiving the S3 pair")]
+    env: String,
+    #[arg(long, help = "Fort key receiving the S3 access key ID")]
+    id_key: String,
+    #[arg(long, help = "Fort key receiving the S3 secret access key")]
+    secret_key: String,
+    #[arg(
+        long,
+        default_value = crate::r2::DEFAULT_R2_API_BASE,
+        help = "Cloudflare API base URL"
+    )]
+    api_base: String,
+    #[arg(
+        long,
+        help = "S3 endpoint for verification (defaults to the account R2 endpoint)"
+    )]
+    s3_endpoint: Option<String>,
+    #[arg(
+        long,
+        default_value = "fort",
+        help = "Policy repo holding the manager token"
+    )]
+    manager_repo: String,
+    #[arg(
+        long,
+        default_value = "prod",
+        help = "Policy env holding the manager token"
+    )]
+    manager_env: String,
+    #[arg(
+        long,
+        default_value = "CF_R2_TOKEN_MANAGER",
+        help = "Fort key holding the manager token"
+    )]
+    manager_key: String,
+    #[arg(
+        long,
+        help = "Validate shape without calling Cloudflare or writing Fort"
+    )]
+    dry_run: bool,
+}
+
+#[derive(Args)]
+struct R2RotateArgs {
+    #[arg(long, help = "Policy repository scope holding the S3 pair")]
+    repo: String,
+    #[arg(long, help = "Environment scope holding the S3 pair")]
+    env: String,
+    #[arg(long, help = "Fort key holding the S3 access key ID")]
+    id_key: String,
+    #[arg(long, help = "Fort key holding the S3 secret access key")]
+    secret_key: String,
+    #[arg(
+        long,
+        help = "Cloudflare token ID (defaults to the stored access key ID)"
+    )]
+    token_id: Option<String>,
+    #[arg(long, help = "Cloudflare account ID")]
+    account_id: String,
+    #[arg(
+        long,
+        default_value = crate::r2::DEFAULT_R2_API_BASE,
+        help = "Cloudflare API base URL"
+    )]
+    api_base: String,
+    #[arg(
+        long,
+        help = "S3 endpoint for verification (defaults to the account R2 endpoint)"
+    )]
+    s3_endpoint: Option<String>,
+    #[arg(
+        long,
+        default_value = "fort",
+        help = "Policy repo holding the manager token"
+    )]
+    manager_repo: String,
+    #[arg(
+        long,
+        default_value = "prod",
+        help = "Policy env holding the manager token"
+    )]
+    manager_env: String,
+    #[arg(
+        long,
+        default_value = "CF_R2_TOKEN_MANAGER",
+        help = "Fort key holding the manager token"
+    )]
+    manager_key: String,
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Delete the old token after the new pair verifies"
+    )]
+    revoke_old: bool,
+    #[arg(
+        long,
+        help = "Validate shape without calling Cloudflare or writing Fort"
+    )]
+    dry_run: bool,
+}
+
+#[derive(Args)]
+struct R2RevokeArgs {
+    #[arg(long, help = "Cloudflare token ID to delete")]
+    token_id: String,
+    #[arg(long, help = "Cloudflare account ID")]
+    account_id: String,
+    #[arg(
+        long,
+        default_value = crate::r2::DEFAULT_R2_API_BASE,
+        help = "Cloudflare API base URL"
+    )]
+    api_base: String,
+    #[arg(
+        long,
+        default_value = "fort",
+        help = "Policy repo holding the manager token"
+    )]
+    manager_repo: String,
+    #[arg(
+        long,
+        default_value = "prod",
+        help = "Policy env holding the manager token"
+    )]
+    manager_env: String,
+    #[arg(
+        long,
+        default_value = "CF_R2_TOKEN_MANAGER",
+        help = "Fort key holding the manager token"
+    )]
+    manager_key: String,
+    #[arg(long, help = "Validate shape without calling Cloudflare")]
+    dry_run: bool,
+}
+
+#[derive(Args)]
+struct R2ListArgs {
+    #[arg(long, help = "Cloudflare account ID")]
+    account_id: String,
+    #[arg(
+        long,
+        default_value = crate::r2::DEFAULT_R2_API_BASE,
+        help = "Cloudflare API base URL"
+    )]
+    api_base: String,
+    #[arg(
+        long,
+        default_value = "fort",
+        help = "Policy repo holding the manager token"
+    )]
+    manager_repo: String,
+    #[arg(
+        long,
+        default_value = "prod",
+        help = "Policy env holding the manager token"
+    )]
+    manager_env: String,
+    #[arg(
+        long,
+        default_value = "CF_R2_TOKEN_MANAGER",
+        help = "Fort key holding the manager token"
+    )]
+    manager_key: String,
+}
+
+#[derive(Args)]
+struct R2AuditArgs {
+    #[arg(long, help = "Cloudflare account ID")]
+    account_id: String,
+    #[arg(
+        long,
+        default_value = crate::r2::DEFAULT_R2_API_BASE,
+        help = "Cloudflare API base URL"
+    )]
+    api_base: String,
+    #[arg(
+        long,
+        default_value = "fort",
+        help = "Policy repo holding the manager token"
+    )]
+    manager_repo: String,
+    #[arg(
+        long,
+        default_value = "prod",
+        help = "Policy env holding the manager token"
+    )]
+    manager_env: String,
+    #[arg(
+        long,
+        default_value = "CF_R2_TOKEN_MANAGER",
+        help = "Fort key holding the manager token"
+    )]
+    manager_key: String,
+    #[arg(
+        long = "check",
+        action = clap::ArgAction::Append,
+        help = "Repeatable Fort key to compare, as repo/env/key"
+    )]
+    checks: Vec<String>,
+}
+
 #[derive(Args)]
 struct GetArgs {
     #[arg(long, help = "Policy repository scope, e.g. aureuma")]
@@ -827,6 +1147,7 @@ impl Client {
             FortCommand::Run(args) => self.cmd_run(args),
             FortCommand::Rotate(command) => self.cmd_rotate(command.command),
             FortCommand::R2(command) => self.cmd_r2(command.command),
+            FortCommand::Keys(command) => self.cmd_keys(command.command),
             FortCommand::Agent(command) => self.cmd_agent(command.command),
         }
     }
@@ -1137,8 +1458,33 @@ impl Client {
     }
 
     fn cmd_r2(&self, command: R2Subcommand) -> Result<()> {
+        eprintln!("warning: 'fort r2' is deprecated, use 'fort keys issue r2'");
         match command {
             R2Subcommand::Issue(args) => self.cmd_r2_issue(args),
+        }
+    }
+
+    fn cmd_keys(&self, command: KeysSubcommand) -> Result<()> {
+        match command {
+            KeysSubcommand::Issue(command) => match command.command {
+                KeysIssueProvider::R2(args) => self.cmd_r2_issue(args),
+            },
+            KeysSubcommand::Create(command) => match command.command {
+                KeysCreateProvider::R2(args) => self.cmd_keys_create_r2(args),
+            },
+            KeysSubcommand::Rotate(command) => match command.command {
+                KeysRotateProvider::R2(args) => self.cmd_keys_rotate_r2(*args),
+                KeysRotateProvider::Npm(args) => self.cmd_rotate_npm(*args),
+            },
+            KeysSubcommand::Revoke(command) => match command.command {
+                KeysRevokeProvider::R2(args) => self.cmd_keys_revoke_r2(args),
+            },
+            KeysSubcommand::List(command) => match command.command {
+                KeysListProvider::R2(args) => self.cmd_keys_list_r2(args),
+            },
+            KeysSubcommand::Audit(command) => match command.command {
+                KeysAuditProvider::R2(args) => self.cmd_keys_audit_r2(args),
+            },
         }
     }
 
@@ -1194,6 +1540,385 @@ impl Client {
             response["ttl_seconds"].as_u64().unwrap_or_default(),
             response["expires_at"].as_str().unwrap_or_default()
         );
+        Ok(())
+    }
+
+    fn get_secret_value_required(&self, repo: &str, env: &str, key: &str) -> Result<String> {
+        self.get_secret_value(repo, env, key)
+            .with_context(|| format!("missing required secret: {repo}/{env}/{key}"))
+    }
+
+    fn r2_s3_endpoint(account_id: &str, endpoint: &Option<String>) -> String {
+        match endpoint {
+            Some(value) if !value.trim().is_empty() => value.trim().to_string(),
+            _ => format!("https://{}.r2.cloudflarestorage.com", account_id.trim()),
+        }
+    }
+
+    fn cmd_keys_create_r2(&self, args: R2CreateArgs) -> Result<()> {
+        if args.buckets.is_empty() {
+            anyhow::bail!("at least one --bucket is required");
+        }
+        if !crate::r2::is_object_permission(&args.permission) {
+            anyhow::bail!("permission must be object-read-write or object-read-only");
+        }
+        if args.dry_run {
+            if self.json {
+                return print_json(&json!({
+                    "provider": "r2",
+                    "dry_run": true,
+                    "would_create_token": args.name,
+                    "buckets": args.buckets,
+                    "permission": args.permission,
+                    "secret_values_loaded": false,
+                }));
+            }
+            println!(
+                "dry-run ok: would create token '{}' over {} bucket(s) into {}/{}/{}",
+                args.name,
+                args.buckets.len(),
+                args.repo,
+                args.env,
+                args.id_key,
+            );
+            return Ok(());
+        }
+        let manager = self.get_secret_value_required(
+            &args.manager_repo,
+            &args.manager_env,
+            &args.manager_key,
+        )?;
+        let grants: Vec<crate::r2::R2BucketGrant> = args
+            .buckets
+            .iter()
+            .map(|bucket| crate::r2::R2BucketGrant {
+                bucket,
+                permission: &args.permission,
+            })
+            .collect();
+        let created = crate::r2::create_r2_token(
+            &args.api_base,
+            &manager,
+            &args.account_id,
+            &args.name,
+            &grants,
+        )
+        .map_err(|error| anyhow::anyhow!("cloudflare r2: {}", error.detail))?;
+        let secret = crate::r2::s3_secret_from_token_value(&created.value);
+        self.set_secret_value(&args.repo, &args.env, &args.id_key, &created.id)?;
+        self.set_secret_value(&args.repo, &args.env, &args.secret_key, &secret)?;
+        let endpoint = Self::r2_s3_endpoint(&args.account_id, &args.s3_endpoint);
+        for bucket in &args.buckets {
+            crate::r2::head_bucket_with_retry(&endpoint, &created.id, &secret, bucket, 6, 20)
+                .map_err(|error| {
+                    anyhow::anyhow!(
+                        "s3 verification failed for bucket {bucket}: {}",
+                        error.detail
+                    )
+                })?;
+        }
+        if self.json {
+            return print_json(&json!({
+                "provider": "r2",
+                "dry_run": false,
+                "token_id": created.id,
+                "fort_scope": format!("{}/{}", args.repo, args.env),
+                "s3_verified_buckets": args.buckets,
+            }));
+        }
+        println!("token_id={}", created.id);
+        println!("fort_updated={}/{}", args.repo, args.env);
+        println!("s3_verified_buckets={}", args.buckets.join(","));
+        Ok(())
+    }
+
+    fn cmd_keys_rotate_r2(&self, args: R2RotateArgs) -> Result<()> {
+        if args.dry_run {
+            if self.json {
+                return print_json(&json!({
+                    "provider": "r2",
+                    "dry_run": true,
+                    "would_rotate": format!(
+                        "{}/{}/{}",
+                        args.repo, args.env, args.id_key
+                    ),
+                    "would_revoke_old": args.revoke_old,
+                    "secret_values_loaded": false,
+                }));
+            }
+            println!(
+                "dry-run ok: would rotate {}/{}/{} (revoke_old={})",
+                args.repo, args.env, args.id_key, args.revoke_old,
+            );
+            return Ok(());
+        }
+        let old_id = self.get_secret_value_required(&args.repo, &args.env, &args.id_key)?;
+        let manager = self.get_secret_value_required(
+            &args.manager_repo,
+            &args.manager_env,
+            &args.manager_key,
+        )?;
+        let token_id = args
+            .token_id
+            .as_deref()
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or(old_id.trim());
+        let old = match crate::r2::get_account_token(
+            &args.api_base,
+            &manager,
+            &args.account_id,
+            token_id,
+        ) {
+            Ok(details) => details,
+            Err(error) if error.status == 404 && args.token_id.is_none() => {
+                anyhow::bail!(
+                    "stored access key ID is not a live token ID; pass --token-id explicitly"
+                )
+            }
+            Err(error) => return Err(anyhow::anyhow!("cloudflare r2: {}", error.detail)),
+        };
+        let owned = crate::r2::object_grants_from_token(&old)
+            .map_err(|error| anyhow::anyhow!("cloudflare r2: {}", error.detail))?;
+        let grants: Vec<crate::r2::R2BucketGrant> = owned
+            .iter()
+            .map(|(bucket, permission)| crate::r2::R2BucketGrant { bucket, permission })
+            .collect();
+        let created = crate::r2::create_r2_token(
+            &args.api_base,
+            &manager,
+            &args.account_id,
+            &old.name,
+            &grants,
+        )
+        .map_err(|error| anyhow::anyhow!("cloudflare r2: {}", error.detail))?;
+        let secret = crate::r2::s3_secret_from_token_value(&created.value);
+        self.set_secret_value(&args.repo, &args.env, &args.id_key, &created.id)?;
+        self.set_secret_value(&args.repo, &args.env, &args.secret_key, &secret)?;
+        let endpoint = Self::r2_s3_endpoint(&args.account_id, &args.s3_endpoint);
+        let mut buckets = Vec::new();
+        for (bucket, _) in &owned {
+            crate::r2::head_bucket_with_retry(&endpoint, &created.id, &secret, bucket, 6, 20)
+                .map_err(|error| {
+                    anyhow::anyhow!(
+                        "s3 verification failed for bucket {bucket}: {}",
+                        error.detail
+                    )
+                })?;
+            buckets.push(bucket.clone());
+        }
+        let mut revoked_old = false;
+        if args.revoke_old {
+            match crate::r2::delete_account_token(
+                &args.api_base,
+                &manager,
+                &args.account_id,
+                &old.id,
+            ) {
+                Ok(()) => revoked_old = true,
+                Err(error) if error.status == 404 => {}
+                Err(error) => return Err(anyhow::anyhow!("cloudflare r2: {}", error.detail)),
+            }
+        }
+        if self.json {
+            return print_json(&json!({
+                "provider": "r2",
+                "dry_run": false,
+                "token_id": created.id,
+                "old_token_id": old.id,
+                "old_token_revoked": revoked_old,
+                "s3_verified_buckets": buckets,
+            }));
+        }
+        println!("token_id={}", created.id);
+        println!("old_token_id={}", old.id);
+        println!("old_token_revoked={revoked_old}");
+        println!("s3_verified_buckets={}", buckets.join(","));
+        Ok(())
+    }
+
+    fn cmd_keys_revoke_r2(&self, args: R2RevokeArgs) -> Result<()> {
+        if args.dry_run {
+            if self.json {
+                return print_json(&json!({
+                    "provider": "r2",
+                    "dry_run": true,
+                    "would_delete_token": args.token_id,
+                    "secret_values_loaded": false,
+                }));
+            }
+            println!("dry-run ok: would delete token {}", args.token_id);
+            return Ok(());
+        }
+        let manager = self.get_secret_value_required(
+            &args.manager_repo,
+            &args.manager_env,
+            &args.manager_key,
+        )?;
+        match crate::r2::delete_account_token(
+            &args.api_base,
+            &manager,
+            &args.account_id,
+            &args.token_id,
+        ) {
+            Ok(()) => {
+                if self.json {
+                    return print_json(&json!({
+                        "provider": "r2",
+                        "deleted_token": args.token_id,
+                    }));
+                }
+                println!("deleted_token={}", args.token_id);
+                Ok(())
+            }
+            Err(error) if error.status == 404 => {
+                if self.json {
+                    return print_json(&json!({
+                        "provider": "r2",
+                        "deleted_token": args.token_id,
+                        "already_absent": true,
+                    }));
+                }
+                println!("deleted_token={} already_absent=true", args.token_id);
+                Ok(())
+            }
+            Err(error) => Err(anyhow::anyhow!("cloudflare r2: {}", error.detail)),
+        }
+    }
+
+    fn cmd_keys_list_r2(&self, args: R2ListArgs) -> Result<()> {
+        let manager = self.get_secret_value_required(
+            &args.manager_repo,
+            &args.manager_env,
+            &args.manager_key,
+        )?;
+        let tokens = crate::r2::list_account_tokens(&args.api_base, &manager, &args.account_id)
+            .map_err(|error| anyhow::anyhow!("cloudflare r2: {}", error.detail))?;
+        let rows: Vec<Value> = tokens
+            .iter()
+            .map(|token| {
+                let mut groups: Vec<String> = token
+                    .policies
+                    .iter()
+                    .flat_map(|policy| {
+                        policy
+                            .permission_groups
+                            .iter()
+                            .map(|group| group.name.clone())
+                    })
+                    .collect();
+                groups.sort();
+                groups.dedup();
+                json!({
+                    "id": token.id,
+                    "name": token.name,
+                    "status": token.status,
+                    "permission_groups": groups,
+                    "issued_on": token.issued_on,
+                    "expires_on": token.expires_on,
+                })
+            })
+            .collect();
+        if self.json {
+            return print_json(&json!(rows));
+        }
+        for row in &rows {
+            println!(
+                "{}\t{}\t{}\t{}",
+                row["id"].as_str().unwrap_or_default(),
+                row["name"].as_str().unwrap_or_default(),
+                row["status"].as_str().unwrap_or_default(),
+                row["permission_groups"]
+                    .as_array()
+                    .map(|groups| {
+                        groups
+                            .iter()
+                            .filter_map(Value::as_str)
+                            .collect::<Vec<_>>()
+                            .join("|")
+                    })
+                    .unwrap_or_default(),
+            );
+        }
+        Ok(())
+    }
+
+    fn cmd_keys_audit_r2(&self, args: R2AuditArgs) -> Result<()> {
+        let mut targets = Vec::new();
+        for check in &args.checks {
+            let parts: Vec<&str> = check.split('/').collect();
+            if parts.len() != 3 || parts.iter().any(|part| part.trim().is_empty()) {
+                anyhow::bail!("--check must be repo/env/key, got '{check}'");
+            }
+            targets.push((
+                check.clone(),
+                parts[0].to_string(),
+                parts[1].to_string(),
+                parts[2].to_string(),
+            ));
+        }
+        let manager = self.get_secret_value_required(
+            &args.manager_repo,
+            &args.manager_env,
+            &args.manager_key,
+        )?;
+        let tokens = crate::r2::list_account_tokens(&args.api_base, &manager, &args.account_id)
+            .map_err(|error| anyhow::anyhow!("cloudflare r2: {}", error.detail))?;
+        let mut values = Vec::new();
+        for (label, repo, env, key) in &targets {
+            let value = self.get_secret_value_required(repo, env, key)?;
+            values.push((label.clone(), value.trim().to_string()));
+        }
+        let mut rows = Vec::new();
+        for token in &tokens {
+            let matched: Vec<String> = values
+                .iter()
+                .filter(|(_, value)| value == &token.id)
+                .map(|(label, _)| label.clone())
+                .collect();
+            rows.push(json!({
+                "id": token.id,
+                "name": token.name,
+                "status": token.status,
+                "fort_matches": matched,
+            }));
+        }
+        let orphans: Vec<String> = values
+            .iter()
+            .filter(|(_, value)| !tokens.iter().any(|token| &token.id == value))
+            .map(|(label, _)| label.clone())
+            .collect();
+        if self.json {
+            return print_json(&json!({
+                "tokens": rows,
+                "orphan_checks": orphans,
+            }));
+        }
+        for row in &rows {
+            let matched = row["fort_matches"]
+                .as_array()
+                .map(|items| {
+                    items
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .collect::<Vec<_>>()
+                        .join(",")
+                })
+                .unwrap_or_default();
+            println!(
+                "{}\t{}\t{}\t{}",
+                row["id"].as_str().unwrap_or_default(),
+                row["name"].as_str().unwrap_or_default(),
+                row["status"].as_str().unwrap_or_default(),
+                if matched.is_empty() {
+                    "UNMATCHED".to_string()
+                } else {
+                    matched
+                },
+            );
+        }
+        for orphan in &orphans {
+            println!("ORPHAN_CHECK\t{orphan}");
+        }
         Ok(())
     }
 
@@ -1350,6 +2075,7 @@ impl Client {
     }
 
     fn cmd_rotate(&self, command: RotateSubcommand) -> Result<()> {
+        eprintln!("warning: 'fort rotate' is deprecated, use 'fort keys rotate <provider>'");
         match command {
             RotateSubcommand::Npm(args) => self.cmd_rotate_npm(*args),
         }
