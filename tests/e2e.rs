@@ -1,7 +1,7 @@
 use std::fs;
 use std::io::{Read, Write};
 use std::net::TcpListener;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -2998,6 +2998,22 @@ fn fort_help_pages_have_no_blank_rows() {
         &["run", "--help"],
         &["rotate", "--help"],
         &["rotate", "npm", "--help"],
+        &["r2", "--help"],
+        &["r2", "issue", "--help"],
+        &["keys", "--help"],
+        &["keys", "issue", "--help"],
+        &["keys", "issue", "r2", "--help"],
+        &["keys", "create", "--help"],
+        &["keys", "create", "r2", "--help"],
+        &["keys", "rotate", "--help"],
+        &["keys", "rotate", "r2", "--help"],
+        &["keys", "rotate", "npm", "--help"],
+        &["keys", "revoke", "--help"],
+        &["keys", "revoke", "r2", "--help"],
+        &["keys", "list", "--help"],
+        &["keys", "list", "r2", "--help"],
+        &["keys", "audit", "--help"],
+        &["keys", "audit", "r2", "--help"],
         &["agent", "--help"],
         &["agent", "create", "--help"],
         &["agent", "get", "--help"],
@@ -3596,8 +3612,9 @@ fn fort_cli_issues_r2_temp_credentials_through_mock_cloudflare() {
             &host,
             "--token-file",
             admin_token_path.to_str().unwrap(),
-            "r2",
+            "keys",
             "issue",
+            "r2",
             "--bucket",
             "ly-restic",
             "--permission",
@@ -3614,6 +3631,40 @@ fn fort_cli_issues_r2_temp_credentials_through_mock_cloudflare() {
         ],
     );
 
+    let legacy = Command::new(&fort)
+        .args([
+            "--host",
+            &host,
+            "--token-file",
+            admin_token_path.to_str().unwrap(),
+            "r2",
+            "issue",
+            "--bucket",
+            "ly-restic",
+            "--permission",
+            "object-read-only",
+            "--ttl-seconds",
+            "600",
+            "--parent-repo",
+            "r2b",
+            "--parent-env",
+            "prod",
+            "--parent-key",
+            "PARENT_KEY",
+            "--dry-run",
+        ])
+        .output()
+        .expect("run legacy r2 issue");
+    assert!(
+        legacy.status.success(),
+        "legacy r2 issue failed: {}",
+        String::from_utf8_lossy(&legacy.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&legacy.stderr).contains("deprecated"),
+        "legacy r2 issue missing deprecation pointer"
+    );
+
     let output = run_capture(
         &fort,
         &[
@@ -3621,8 +3672,9 @@ fn fort_cli_issues_r2_temp_credentials_through_mock_cloudflare() {
             &host,
             "--token-file",
             admin_token_path.to_str().unwrap(),
-            "r2",
+            "keys",
             "issue",
+            "r2",
             "--bucket",
             "ly-restic",
             "--permission",
@@ -3706,8 +3758,9 @@ fn fort_cli_issues_r2_temp_credentials_through_mock_cloudflare() {
             &host,
             "--token-file",
             access_path.to_str().unwrap(),
-            "r2",
+            "keys",
             "issue",
+            "r2",
             "--bucket",
             "ly-restic",
             "--permission",
@@ -3738,6 +3791,717 @@ fn fort_cli_issues_r2_temp_credentials_through_mock_cloudflare() {
     );
 
     r2_mock.join().expect("join mock r2");
+    child.kill().expect("kill fortd");
+    child.wait().expect("wait fortd");
+}
+
+struct MockTokensRoute {
+    method: &'static str,
+    path: &'static str,
+    auth: &'static str,
+    contains: Vec<&'static str>,
+    status: u16,
+    body: &'static str,
+}
+
+fn start_mock_cloudflare_tokens(routes: Vec<MockTokensRoute>) -> (String, thread::JoinHandle<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock tokens");
+    let url = format!("http://{}", listener.local_addr().expect("mock addr"));
+    let handle = thread::spawn(move || {
+        for route in routes {
+            let (mut stream, _) = listener.accept().expect("accept mock tokens request");
+            let request = read_http_request(&mut stream);
+            assert!(
+                request.starts_with(&format!("{} {} ", route.method, route.path)),
+                "unexpected tokens request: {request}"
+            );
+            assert!(
+                request.to_ascii_lowercase().contains(route.auth),
+                "missing auth in tokens request: {request}"
+            );
+            for needle in &route.contains {
+                assert!(
+                    request.contains(needle),
+                    "missing {needle} in tokens request: {request}"
+                );
+            }
+            let reason = if route.status == 200 {
+                "OK"
+            } else if route.status == 404 {
+                "Not Found"
+            } else {
+                "Error"
+            };
+            write!(
+                stream,
+                "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                route.status,
+                reason,
+                route.body.len(),
+                route.body
+            )
+            .expect("write tokens response");
+        }
+    });
+    (url, handle)
+}
+
+fn boot_keys_test_fortd(temp: &TempDir) -> (String, String, PathBuf, PathBuf, std::process::Child) {
+    let state_dir = temp.path().join("state");
+    let safe_root = temp.path().join("safe");
+    let safe_repo = safe_root.join("safe");
+    fs::create_dir_all(&state_dir).expect("mkdir state");
+    fs::create_dir_all(&safe_repo).expect("mkdir safe");
+    let state_path = state_dir.join("state.json");
+    let keyring_path = state_dir.join("vault-keyring.json");
+    let signing_key_path = state_dir.join("jwt-signing.key");
+    let config_path = state_dir.join("fortd.toml");
+    let admin_token_path = state_dir.join("admin.token");
+    let admin_token = seed_state(&state_path, &keyring_path, &signing_key_path);
+    fs::write(&admin_token_path, admin_token.as_bytes()).expect("write admin token");
+    set_0600(&admin_token_path);
+    let addr = free_addr();
+    let fortd = std::env::var("CARGO_BIN_EXE_fortd").expect("fortd path");
+    let fort = std::env::var("CARGO_BIN_EXE_fort").expect("fort path");
+    let host = format!("http://{addr}");
+    fs::write(
+        &config_path,
+        format!(
+            "addr = \"{addr}\"\nstate_path = \"{}\"\njwt_signing_key_file = \"{}\"\nsafe_root = \"{}\"\nvault_keyring_file = \"{}\"\ntoken_ttl = \"15m\"\nrefresh_session_ttl = \"30d\"\nrun_ttl = \"60s\"\nsecret_ttl = \"120s\"\n",
+            state_path.display(),
+            signing_key_path.display(),
+            safe_root.display(),
+            keyring_path.display(),
+        ),
+    )
+    .expect("write fortd config");
+    let child = Command::new(&fortd)
+        .args(["--config-file", config_path.to_str().expect("config path")])
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .expect("spawn fortd");
+    wait_for(Duration::from_secs(10), || {
+        Command::new(&fort)
+            .args([
+                "--host",
+                &host,
+                "--token-file",
+                admin_token_path.to_str().expect("admin token path"),
+                "doctor",
+            ])
+            .status()
+            .ok()
+            .is_some_and(|status| status.success())
+    });
+    (host, fort, admin_token_path, state_dir, child)
+}
+
+fn keys_set(
+    fort: &str,
+    host: &str,
+    admin_token_path: &Path,
+    repo: &str,
+    env: &str,
+    key: &str,
+    value: &str,
+) {
+    run_ok(
+        fort,
+        &[
+            "--host",
+            host,
+            "--token-file",
+            admin_token_path.to_str().unwrap(),
+            "scope",
+            "ensure",
+            "--repo",
+            repo,
+            "--env",
+            env,
+        ],
+    );
+    run_ok(
+        fort,
+        &[
+            "--host",
+            host,
+            "--token-file",
+            admin_token_path.to_str().unwrap(),
+            "set",
+            "--repo",
+            repo,
+            "--env",
+            env,
+            "--key",
+            key,
+            "--value",
+            value,
+        ],
+    );
+}
+
+#[test]
+fn fort_keys_create_r2_through_mock_cloudflare() {
+    let temp = TempDir::new().expect("tempdir");
+    let groups_body = r#"{"success":true,"errors":[],"messages":[],"result":[{"id":"grp_write_id","name":"Workers R2 Storage Bucket Item Write"},{"id":"grp_read_id","name":"Workers R2 Storage Bucket Item Read"}]}"#;
+    let (mock_base, mock) = start_mock_cloudflare_tokens(vec![
+        MockTokensRoute {
+            method: "GET",
+            path: "/accounts/test-account/tokens/permission_groups",
+            auth: "authorization: bearer test_manager_token",
+            contains: vec![],
+            status: 200,
+            body: groups_body,
+        },
+        MockTokensRoute {
+            method: "POST",
+            path: "/accounts/test-account/tokens",
+            auth: "authorization: bearer test_manager_token",
+            contains: vec![
+                "\"name\":\"app-token\"",
+                "com.cloudflare.edge.r2.bucket.test-account_default_appb1",
+                "com.cloudflare.edge.r2.bucket.test-account_default_appb2",
+                "\"id\":\"grp_write_id\"",
+            ],
+            status: 200,
+            body: r#"{"success":true,"errors":[],"messages":[],"result":{"id":"tok_new_id","value":"new_token_value","name":"app-token","status":"active"}}"#,
+        },
+        MockTokensRoute {
+            method: "HEAD",
+            path: "/appb1",
+            auth: "authorization: aws4-hmac-sha256 credential=tok_new_id/",
+            contains: vec![],
+            status: 200,
+            body: "",
+        },
+        MockTokensRoute {
+            method: "HEAD",
+            path: "/appb2",
+            auth: "authorization: aws4-hmac-sha256 credential=tok_new_id/",
+            contains: vec![],
+            status: 200,
+            body: "",
+        },
+    ]);
+    let (host, fort, admin_token_path, _, mut child) = boot_keys_test_fortd(&temp);
+    keys_set(
+        &fort,
+        &host,
+        &admin_token_path,
+        "mgmt",
+        "prod",
+        "MGR",
+        "test_manager_token",
+    );
+    run_ok(
+        &fort,
+        &[
+            "--host",
+            &host,
+            "--token-file",
+            admin_token_path.to_str().unwrap(),
+            "scope",
+            "ensure",
+            "--repo",
+            "app",
+            "--env",
+            "prod",
+        ],
+    );
+    let output = run_capture(
+        &fort,
+        &[
+            "--host",
+            &host,
+            "--token-file",
+            admin_token_path.to_str().unwrap(),
+            "keys",
+            "create",
+            "r2",
+            "--name",
+            "app-token",
+            "--bucket",
+            "appb1",
+            "--bucket",
+            "appb2",
+            "--account-id",
+            "test-account",
+            "--repo",
+            "app",
+            "--env",
+            "prod",
+            "--id-key",
+            "ID",
+            "--secret-key",
+            "SEC",
+            "--api-base",
+            &mock_base,
+            "--s3-endpoint",
+            &mock_base,
+            "--manager-repo",
+            "mgmt",
+            "--manager-env",
+            "prod",
+            "--manager-key",
+            "MGR",
+        ],
+    );
+    assert!(
+        output.contains("token_id=tok_new_id"),
+        "missing token id in output: {output}"
+    );
+    let stored_id = run_capture(
+        &fort,
+        &[
+            "--host",
+            &host,
+            "--token-file",
+            admin_token_path.to_str().unwrap(),
+            "get",
+            "--repo",
+            "app",
+            "--env",
+            "prod",
+            "--key",
+            "ID",
+            "--format",
+            "raw",
+        ],
+    );
+    assert_eq!(stored_id.trim(), "tok_new_id");
+    let stored_secret = run_capture(
+        &fort,
+        &[
+            "--host",
+            &host,
+            "--token-file",
+            admin_token_path.to_str().unwrap(),
+            "get",
+            "--repo",
+            "app",
+            "--env",
+            "prod",
+            "--key",
+            "SEC",
+            "--format",
+            "raw",
+        ],
+    );
+    {
+        use sha2::Digest;
+        let expected = hex::encode(sha2::Sha256::digest(b"new_token_value"));
+        assert_eq!(stored_secret.trim(), expected);
+    }
+    mock.join().expect("join mock tokens");
+    child.kill().expect("kill fortd");
+    child.wait().expect("wait fortd");
+}
+
+#[test]
+fn fort_keys_rotate_r2_through_mock_cloudflare() {
+    let temp = TempDir::new().expect("tempdir");
+    let groups_body = r#"{"success":true,"errors":[],"messages":[],"result":[{"id":"grp_write_id","name":"Workers R2 Storage Bucket Item Write"}]}"#;
+    let details_body = r#"{"success":true,"errors":[],"messages":[],"result":{"id":"tok_old_id","name":"app-token","status":"active","policies":[{"effect":"allow","resources":{"com.cloudflare.edge.r2.bucket.test-account_default_appb":"*"},"permission_groups":[{"id":"grp_write_id","name":"Workers R2 Storage Bucket Item Write"}]}],"issued_on":"2026-01-01T00:00:00Z","expires_on":null}}"#;
+    let (mock_base, mock) = start_mock_cloudflare_tokens(vec![
+        MockTokensRoute {
+            method: "GET",
+            path: "/accounts/test-account/tokens/tok_old_id",
+            auth: "authorization: bearer test_manager_token",
+            contains: vec![],
+            status: 200,
+            body: details_body,
+        },
+        MockTokensRoute {
+            method: "GET",
+            path: "/accounts/test-account/tokens/permission_groups",
+            auth: "authorization: bearer test_manager_token",
+            contains: vec![],
+            status: 200,
+            body: groups_body,
+        },
+        MockTokensRoute {
+            method: "POST",
+            path: "/accounts/test-account/tokens",
+            auth: "authorization: bearer test_manager_token",
+            contains: vec![
+                "\"name\":\"app-token\"",
+                "com.cloudflare.edge.r2.bucket.test-account_default_appb",
+            ],
+            status: 200,
+            body: r#"{"success":true,"errors":[],"messages":[],"result":{"id":"tok_new_id","value":"new_token_value","name":"app-token","status":"active"}}"#,
+        },
+        MockTokensRoute {
+            method: "HEAD",
+            path: "/appb",
+            auth: "authorization: aws4-hmac-sha256 credential=tok_new_id/",
+            contains: vec![],
+            status: 200,
+            body: "",
+        },
+        MockTokensRoute {
+            method: "DELETE",
+            path: "/accounts/test-account/tokens/tok_old_id",
+            auth: "authorization: bearer test_manager_token",
+            contains: vec![],
+            status: 200,
+            body: r#"{"success":true,"errors":[],"messages":[],"result":{"id":"tok_old_id"}}"#,
+        },
+    ]);
+    let (host, fort, admin_token_path, _, mut child) = boot_keys_test_fortd(&temp);
+    keys_set(
+        &fort,
+        &host,
+        &admin_token_path,
+        "mgmt",
+        "prod",
+        "MGR",
+        "test_manager_token",
+    );
+    keys_set(
+        &fort,
+        &host,
+        &admin_token_path,
+        "app",
+        "prod",
+        "ID",
+        "tok_old_id",
+    );
+    keys_set(
+        &fort,
+        &host,
+        &admin_token_path,
+        "app",
+        "prod",
+        "SEC",
+        "old_secret_placeholder",
+    );
+    let output = run_capture(
+        &fort,
+        &[
+            "--host",
+            &host,
+            "--token-file",
+            admin_token_path.to_str().unwrap(),
+            "keys",
+            "rotate",
+            "r2",
+            "--repo",
+            "app",
+            "--env",
+            "prod",
+            "--id-key",
+            "ID",
+            "--secret-key",
+            "SEC",
+            "--account-id",
+            "test-account",
+            "--api-base",
+            &mock_base,
+            "--s3-endpoint",
+            &mock_base,
+            "--manager-repo",
+            "mgmt",
+            "--manager-env",
+            "prod",
+            "--manager-key",
+            "MGR",
+            "--revoke-old",
+        ],
+    );
+    assert!(
+        output.contains("token_id=tok_new_id"),
+        "missing new token id in output: {output}"
+    );
+    assert!(
+        output.contains("old_token_revoked=true"),
+        "missing revoke proof in output: {output}"
+    );
+    let stored_id = run_capture(
+        &fort,
+        &[
+            "--host",
+            &host,
+            "--token-file",
+            admin_token_path.to_str().unwrap(),
+            "get",
+            "--repo",
+            "app",
+            "--env",
+            "prod",
+            "--key",
+            "ID",
+            "--format",
+            "raw",
+        ],
+    );
+    assert_eq!(stored_id.trim(), "tok_new_id");
+    mock.join().expect("join mock tokens");
+    child.kill().expect("kill fortd");
+    child.wait().expect("wait fortd");
+}
+
+#[test]
+fn fort_keys_revoke_list_audit_r2_through_mock_cloudflare() {
+    let temp = TempDir::new().expect("tempdir");
+    let list_body = r#"{"success":true,"errors":[],"messages":[],"result":[{"id":"tok_a","name":"alpha-token","status":"active","policies":[{"effect":"allow","resources":{"com.cloudflare.edge.r2.bucket.test-account_default_appb":"*"},"permission_groups":[{"id":"grp_write_id","name":"Workers R2 Storage Bucket Item Write"}]}],"issued_on":"2026-01-01T00:00:00Z","expires_on":null},{"id":"tok_b","name":"beta-token","status":"active","policies":[],"issued_on":null,"expires_on":null}],"result_info":{"page":1,"per_page":100,"count":2,"total_count":2}}"#;
+    let (mock_base, mock) = start_mock_cloudflare_tokens(vec![
+        MockTokensRoute {
+            method: "DELETE",
+            path: "/accounts/test-account/tokens/tok_gone",
+            auth: "authorization: bearer test_manager_token",
+            contains: vec![],
+            status: 200,
+            body: r#"{"success":true,"errors":[],"messages":[],"result":{"id":"tok_gone"}}"#,
+        },
+        MockTokensRoute {
+            method: "DELETE",
+            path: "/accounts/test-account/tokens/tok_missing",
+            auth: "authorization: bearer test_manager_token",
+            contains: vec![],
+            status: 404,
+            body: r#"{"success":false,"errors":[{"code":7003,"message":"Could not find token"}],"messages":[],"result":null}"#,
+        },
+        MockTokensRoute {
+            method: "GET",
+            path: "/accounts/test-account/tokens?per_page=100&page=1",
+            auth: "authorization: bearer test_manager_token",
+            contains: vec![],
+            status: 200,
+            body: list_body,
+        },
+        MockTokensRoute {
+            method: "GET",
+            path: "/accounts/test-account/tokens?per_page=100&page=1",
+            auth: "authorization: bearer test_manager_token",
+            contains: vec![],
+            status: 200,
+            body: list_body,
+        },
+    ]);
+    let (host, fort, admin_token_path, _, mut child) = boot_keys_test_fortd(&temp);
+    keys_set(
+        &fort,
+        &host,
+        &admin_token_path,
+        "mgmt",
+        "prod",
+        "MGR",
+        "test_manager_token",
+    );
+    keys_set(
+        &fort,
+        &host,
+        &admin_token_path,
+        "app",
+        "prod",
+        "ID",
+        "tok_a",
+    );
+    keys_set(
+        &fort,
+        &host,
+        &admin_token_path,
+        "app",
+        "prod",
+        "ORPHAN",
+        "tok_nowhere",
+    );
+    let revoked = run_capture(
+        &fort,
+        &[
+            "--host",
+            &host,
+            "--token-file",
+            admin_token_path.to_str().unwrap(),
+            "keys",
+            "revoke",
+            "r2",
+            "--token-id",
+            "tok_gone",
+            "--account-id",
+            "test-account",
+            "--api-base",
+            &mock_base,
+            "--manager-repo",
+            "mgmt",
+            "--manager-env",
+            "prod",
+            "--manager-key",
+            "MGR",
+        ],
+    );
+    assert!(
+        revoked.contains("deleted_token=tok_gone"),
+        "missing delete proof: {revoked}"
+    );
+    let absent = run_capture(
+        &fort,
+        &[
+            "--host",
+            &host,
+            "--token-file",
+            admin_token_path.to_str().unwrap(),
+            "keys",
+            "revoke",
+            "r2",
+            "--token-id",
+            "tok_missing",
+            "--account-id",
+            "test-account",
+            "--api-base",
+            &mock_base,
+            "--manager-repo",
+            "mgmt",
+            "--manager-env",
+            "prod",
+            "--manager-key",
+            "MGR",
+        ],
+    );
+    assert!(
+        absent.contains("already_absent=true"),
+        "missing absent note: {absent}"
+    );
+    let listed = run_capture(
+        &fort,
+        &[
+            "--host",
+            &host,
+            "--token-file",
+            admin_token_path.to_str().unwrap(),
+            "keys",
+            "list",
+            "r2",
+            "--account-id",
+            "test-account",
+            "--api-base",
+            &mock_base,
+            "--manager-repo",
+            "mgmt",
+            "--manager-env",
+            "prod",
+            "--manager-key",
+            "MGR",
+        ],
+    );
+    assert!(
+        listed.contains("alpha-token") && listed.contains("beta-token"),
+        "missing tokens in list: {listed}"
+    );
+    let audited = run_capture(
+        &fort,
+        &[
+            "--host",
+            &host,
+            "--token-file",
+            admin_token_path.to_str().unwrap(),
+            "keys",
+            "audit",
+            "r2",
+            "--account-id",
+            "test-account",
+            "--api-base",
+            &mock_base,
+            "--manager-repo",
+            "mgmt",
+            "--manager-env",
+            "prod",
+            "--manager-key",
+            "MGR",
+            "--check",
+            "app/prod/ID",
+            "--check",
+            "app/prod/ORPHAN",
+        ],
+    );
+    assert!(
+        audited.contains("tok_a") && audited.contains("app/prod/ID"),
+        "missing match in audit: {audited}"
+    );
+    assert!(
+        audited.contains("UNMATCHED"),
+        "missing unmatched marker in audit: {audited}"
+    );
+    assert!(
+        audited.contains("ORPHAN_CHECK\tapp/prod/ORPHAN"),
+        "missing orphan in audit: {audited}"
+    );
+    mock.join().expect("join mock tokens");
+    child.kill().expect("kill fortd");
+    child.wait().expect("wait fortd");
+}
+
+#[test]
+fn fort_keys_dry_runs_touch_neither_cloudflare_nor_fort() {
+    let temp = TempDir::new().expect("tempdir");
+    let (host, fort, admin_token_path, _, mut child) = boot_keys_test_fortd(&temp);
+    let dead = "http://127.0.0.1:1";
+    let token = admin_token_path.to_str().unwrap();
+    for args in [
+        vec![
+            "keys",
+            "create",
+            "r2",
+            "--name",
+            "x",
+            "--bucket",
+            "b",
+            "--account-id",
+            "a",
+            "--repo",
+            "r",
+            "--env",
+            "e",
+            "--id-key",
+            "i",
+            "--secret-key",
+            "s",
+            "--api-base",
+            dead,
+            "--manager-key",
+            "BOGUS",
+            "--dry-run",
+        ],
+        vec![
+            "keys",
+            "rotate",
+            "r2",
+            "--repo",
+            "r",
+            "--env",
+            "e",
+            "--id-key",
+            "i",
+            "--secret-key",
+            "s",
+            "--account-id",
+            "a",
+            "--api-base",
+            dead,
+            "--manager-key",
+            "BOGUS",
+            "--dry-run",
+        ],
+        vec![
+            "keys",
+            "revoke",
+            "r2",
+            "--token-id",
+            "t",
+            "--account-id",
+            "a",
+            "--api-base",
+            dead,
+            "--manager-key",
+            "BOGUS",
+            "--dry-run",
+        ],
+    ] {
+        let mut full = vec!["--host", host.as_str(), "--token-file", token];
+        full.extend(args);
+        run_ok(&fort, &full);
+    }
     child.kill().expect("kill fortd");
     child.wait().expect("wait fortd");
 }
