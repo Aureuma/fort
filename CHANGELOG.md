@@ -18,6 +18,9 @@ All notable changes to this project will be documented in this file.
 - Renamed the container R2 issuer key reference from
   `VIVA_CLOUDFLARE_R2_ISSUER_TOKEN` to
   `TOFU_CLOUDFLARE_R2_ISSUER_TOKEN` to match the Fort rename.
+- Documented that the `CF_R2_TOKEN_MANAGER` bootstrap credential must
+  stay a user token (Cloudflare forbids token-management groups on
+  account tokens) and can only be changed from the dashboard.
 
 ## [v1.5.0] - 2026-11-18
 
