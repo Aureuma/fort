@@ -111,6 +111,12 @@ Rules:
   `fort/prod` `CF_R2_TOKEN_MANAGER` (override with `--manager-repo`,
   `--manager-env`, `--manager-key`). That token needs Account API
   Tokens Read+Write and is the one human-bootstrapped credential.
+  It must stay a **user** token: Cloudflare marks the token-management
+  groups `selectable: false` for account tokens, and no token can
+  beget a manager ("sub-token is not allowed to have permissions to
+  manage other tokens"). Only the dashboard (Super Admin / Token
+  Provisioning) can create, narrow, or rotate it; verify afterwards
+  with `fort keys list r2 --account-id <id>`.
 - `create` stores the S3 pair in Fort and S3-verifies every bucket
   before reporting success. `rotate` copies the live token policy,
   cuts Fort over, verifies, then deletes the old token only with
