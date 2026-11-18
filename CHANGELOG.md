@@ -13,6 +13,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [v1.5.0] - 2026-11-18
+
 ### Added
 
 - Added the unified `fort keys <verb> <provider>` command family for
