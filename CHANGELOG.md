@@ -13,6 +13,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+
+- Renamed the container R2 issuer key reference from
+  `VIVA_CLOUDFLARE_R2_ISSUER_TOKEN` to
+  `TOFU_CLOUDFLARE_R2_ISSUER_TOKEN` to match the Fort rename.
+
 ## [v1.5.0] - 2026-11-18
 
 ### Added
