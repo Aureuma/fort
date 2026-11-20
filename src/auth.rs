@@ -111,12 +111,9 @@ impl Manager {
             nbf: (now - chrono::Duration::seconds(5)).timestamp(),
         };
         let header = Header::new(Algorithm::HS256);
-        let token = encode(
-            &header,
-            &claims,
-            &EncodingKey::from_secret(&self.signing_key),
-        )
-        .map_err(|_| AuthError::Internal)?;
+        let encoding_key =
+            EncodingKey::from_secret(&self.signing_key).map_err(|_| AuthError::Internal)?;
+        let token = encode(&header, &claims, &encoding_key).map_err(|_| AuthError::Internal)?;
         let record = TokenRecord {
             jti,
             agent_id: agent.id.clone(),
@@ -185,12 +182,10 @@ impl Manager {
         let mut validation = Validation::new(Algorithm::HS256);
         validation.validate_aud = false;
         validation.set_required_spec_claims(&["exp", "iat", "nbf", "iss", "sub", "aud"]);
-        let data = decode::<Claims>(
-            token.trim(),
-            &DecodingKey::from_secret(&self.signing_key),
-            &validation,
-        )
-        .map_err(|_| AuthError::Unauthorized)?;
+        let decoding_key =
+            DecodingKey::from_secret(&self.signing_key).map_err(|_| AuthError::Unauthorized)?;
+        let data = decode::<Claims>(token.trim(), &decoding_key, &validation)
+            .map_err(|_| AuthError::Unauthorized)?;
         let claims = data.claims;
         if claims.jti.trim().is_empty()
             || claims.agent_id.trim().is_empty()
