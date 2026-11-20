@@ -6,6 +6,7 @@ use clap::Parser;
 #[derive(Parser)]
 #[command(
     name = "fort-agent",
+    version,
     about = "Keep a Fort access token fresh from a refresh-token file",
     long_about = "Refresh loop for workload runtimes: reads a 0600 refresh-token file, mints short-lived access tokens, and writes the current one to --token-path. Host resolution: --host, FORT_HOST, ~/.fort/settings.toml [fort].host."
 )]

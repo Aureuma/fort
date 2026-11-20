@@ -1720,6 +1720,55 @@ fn cli_errors_print_full_chain() {
 }
 
 #[test]
+fn remaining_bins_version_flags_agree_with_cargo_toml() {
+    for (bin_env, bin_name) in [
+        ("CARGO_BIN_EXE_fort-agent", "fort-agent"),
+        ("CARGO_BIN_EXE_fort-seed", "fort-seed"),
+        ("CARGO_BIN_EXE_fort-breakglass", "fort-breakglass"),
+        ("CARGO_BIN_EXE_fort-release", "fort-release"),
+    ] {
+        let bin = std::env::var(bin_env).expect("bin path");
+        let expected = format!("{bin_name} {}", env!("CARGO_PKG_VERSION"));
+        for flag in ["--version", "-V"] {
+            let output = Command::new(&bin)
+                .arg(flag)
+                .output()
+                .expect("run version flag");
+            assert!(
+                output.status.success(),
+                "{bin_name} {flag} failed: stdout={} stderr={}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(
+                String::from_utf8_lossy(&output.stdout).trim(),
+                expected,
+                "{bin_name} {flag} disagrees with Cargo.toml"
+            );
+        }
+    }
+}
+
+#[test]
+fn fort_release_version_subcommand_reports_bare_version() {
+    let release = std::env::var("CARGO_BIN_EXE_fort-release").expect("fort-release path");
+    let output = Command::new(&release)
+        .arg("version")
+        .output()
+        .expect("run fort-release version");
+    assert!(
+        output.status.success(),
+        "fort-release version failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        env!("CARGO_PKG_VERSION")
+    );
+}
+
+#[test]
 fn fort_breakglass_issues_single_active_admin_token() {
     let temp = TempDir::new().expect("tempdir");
     let state_dir = temp.path().join("state");
