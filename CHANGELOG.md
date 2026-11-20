@@ -11,6 +11,40 @@ All notable changes to this project will be documented in this file.
 - Every commit bumps PATCH in the same commit; only `vX.Y.0` minor tags are
   published as GitHub Releases (see `docs/RELEASING.md`).
 
+## [Unreleased]
+
+### Changed
+
+- Renamed the container R2 issuer key reference from
+  `VIVA_CLOUDFLARE_R2_ISSUER_TOKEN` to
+  `TOFU_CLOUDFLARE_R2_ISSUER_TOKEN` to match the Fort rename.
+- Documented that the `CF_R2_TOKEN_MANAGER` bootstrap credential must
+  stay a user token (Cloudflare forbids token-management groups on
+  account tokens) and can only be changed from the dashboard.
+
+## [v1.5.0] - 2026-11-18
+
+### Added
+
+- Added the unified `fort keys <verb> <provider>` command family for
+  provider credential lifecycle: `issue`, `create`, `rotate`,
+  `revoke`, `list`, and `audit`, starting with the `r2` provider
+  (`npm` rotation moved under `keys rotate` too). The old `fort r2`
+  and `fort rotate` spellings remain as deprecated aliases.
+
+## [v1.4.0] - 2026-11-16
+
+### Added
+
+- Added Fort-managed R2 temporary-credential issuance (`fort r2 issue`)
+  backed by a long-lived issuer token in the safe. Callers get
+  short-lived, bucket-scoped S3 credentials (7-day TTL cap) without ever
+  seeing the issuer token.
+
+### Changed
+
+- Raised the default refresh session lifetime from 30 days to 90 days.
+
 ## [1.3.0] - 2026-11-02
 
 ## [v1.2.0] - 2026-10-19

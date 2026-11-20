@@ -8,7 +8,7 @@ use anyhow::{Context, Result, bail};
 use serde::Deserialize;
 
 pub const DEFAULT_TOKEN_TTL: Duration = Duration::from_secs(15 * 60);
-pub const DEFAULT_REFRESH_SESSION_TTL: Duration = Duration::from_secs(30 * 24 * 60 * 60);
+pub const DEFAULT_REFRESH_SESSION_TTL: Duration = Duration::from_secs(90 * 24 * 60 * 60);
 pub const DEFAULT_RUN_TTL: Duration = Duration::from_secs(60);
 pub const DEFAULT_SECRET_TTL: Duration = Duration::from_secs(120);
 
@@ -28,6 +28,23 @@ pub struct Config {
     pub github_pepper_file: Option<String>,
     pub github_pepper: Vec<u8>,
     pub github_api_base: String,
+    pub r2: R2Config,
+}
+
+#[derive(Clone, Debug)]
+pub struct R2Config {
+    pub api_base: String,
+    pub account_id: String,
+    pub issuer_repo: String,
+    pub issuer_env: String,
+    pub issuer_token_key: String,
+}
+
+impl R2Config {
+    /// The issuer is only active once an account id and issuer token key are set.
+    pub fn enabled(&self) -> bool {
+        !self.account_id.trim().is_empty() && !self.issuer_token_key.trim().is_empty()
+    }
 }
 
 impl Config {
@@ -73,6 +90,13 @@ impl Config {
                 "FORT_GITHUB_API_BASE",
                 crate::github_auth::DEFAULT_GITHUB_API_BASE,
             ),
+            r2: R2Config {
+                api_base: env_or("FORT_R2_API_BASE", crate::r2::DEFAULT_R2_API_BASE),
+                account_id: env_or("FORT_R2_ACCOUNT_ID", ""),
+                issuer_repo: env_or("FORT_R2_ISSUER_REPO", ""),
+                issuer_env: env_or("FORT_R2_ISSUER_ENV", ""),
+                issuer_token_key: env_or("FORT_R2_ISSUER_TOKEN_KEY", ""),
+            },
         })
     }
 
@@ -122,6 +146,13 @@ impl Config {
                 parsed.github_api_base,
                 crate::github_auth::DEFAULT_GITHUB_API_BASE,
             ),
+            r2: R2Config {
+                api_base: normalize_value(parsed.r2_api_base, crate::r2::DEFAULT_R2_API_BASE),
+                account_id: normalize_value(parsed.r2_account_id, ""),
+                issuer_repo: normalize_value(parsed.r2_issuer_repo, ""),
+                issuer_env: normalize_value(parsed.r2_issuer_env, ""),
+                issuer_token_key: normalize_value(parsed.r2_issuer_token_key, ""),
+            },
         })
     }
 }
@@ -152,6 +183,16 @@ struct FileConfig {
     github_pepper_file: String,
     #[serde(default)]
     github_api_base: String,
+    #[serde(default)]
+    r2_api_base: String,
+    #[serde(default)]
+    r2_account_id: String,
+    #[serde(default)]
+    r2_issuer_repo: String,
+    #[serde(default)]
+    r2_issuer_env: String,
+    #[serde(default)]
+    r2_issuer_token_key: String,
 }
 
 pub fn env_trim(name: &str) -> String {
@@ -286,7 +327,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn file_config_defaults_normal_refresh_sessions_to_thirty_days() {
+    fn file_config_defaults_normal_refresh_sessions_to_ninety_days() {
         let dir = tempfile::tempdir().expect("tempdir");
         let signing_key = dir.path().join("fort-jwt-signing.key");
         fs::write(&signing_key, "test-signing-key-that-is-long-enough").expect("write key");
@@ -304,7 +345,7 @@ mod tests {
         assert_eq!(config.refresh_session_ttl, DEFAULT_REFRESH_SESSION_TTL);
         assert_eq!(
             config.refresh_session_ttl,
-            Duration::from_secs(30 * 24 * 60 * 60)
+            Duration::from_secs(90 * 24 * 60 * 60)
         );
     }
 
