@@ -1546,6 +1546,87 @@ fn fort_version_reports_without_host() {
 }
 
 #[test]
+fn fort_version_flag_agrees_with_subcommand() {
+    let fort = std::env::var("CARGO_BIN_EXE_fort").expect("fort path");
+    let missing_settings = std::env::temp_dir().join("fort-missing-settings.toml");
+    let _ = fs::remove_file(&missing_settings);
+    let expected_flag = format!("fort {}", env!("CARGO_PKG_VERSION"));
+    for flag in ["--version", "-V"] {
+        let output = Command::new(&fort)
+            .arg(flag)
+            .env_remove("FORT_HOST")
+            .env("FORT_SETTINGS_FILE", &missing_settings)
+            .env_remove("FORT_TOKEN_PATH")
+            .env_remove("FORT_BOOTSTRAP_TOKEN_FILE")
+            .output()
+            .expect("run fort version flag");
+        assert!(
+            output.status.success(),
+            "fort {flag} failed: stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            expected_flag
+        );
+    }
+    let subcommand = Command::new(&fort)
+        .arg("version")
+        .env_remove("FORT_HOST")
+        .env("FORT_SETTINGS_FILE", &missing_settings)
+        .env_remove("FORT_TOKEN_PATH")
+        .env_remove("FORT_BOOTSTRAP_TOKEN_FILE")
+        .output()
+        .expect("run fort version");
+    assert!(subcommand.status.success());
+    let subcommand_version = String::from_utf8_lossy(&subcommand.stdout)
+        .trim()
+        .to_string();
+    assert_eq!(subcommand_version, env!("CARGO_PKG_VERSION"));
+    assert!(
+        expected_flag.ends_with(&subcommand_version),
+        "flag output {expected_flag} does not agree with subcommand output {subcommand_version}"
+    );
+}
+
+#[test]
+fn fortd_version_reports_without_config() {
+    let fortd = std::env::var("CARGO_BIN_EXE_fortd").expect("fortd path");
+    let output = Command::new(&fortd)
+        .arg("version")
+        .output()
+        .expect("run fortd version");
+    assert!(
+        output.status.success(),
+        "fortd version failed: stdout={} stderr={}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&output.stdout).trim(),
+        env!("CARGO_PKG_VERSION")
+    );
+    let expected_flag = format!("fortd {}", env!("CARGO_PKG_VERSION"));
+    for flag in ["--version", "-V"] {
+        let output = Command::new(&fortd)
+            .arg(flag)
+            .output()
+            .expect("run fortd version flag");
+        assert!(
+            output.status.success(),
+            "fortd {flag} failed: stdout={} stderr={}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout).trim(),
+            expected_flag
+        );
+    }
+}
+
+#[test]
 fn fort_breakglass_issues_single_active_admin_token() {
     let temp = TempDir::new().expect("tempdir");
     let state_dir = temp.path().join("state");
