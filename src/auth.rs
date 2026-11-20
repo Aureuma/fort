@@ -314,7 +314,7 @@ pub fn hash_refresh_token(token: &str) -> String {
 
 fn random_hex(bytes: usize) -> std::io::Result<String> {
     let mut raw = vec![0u8; bytes];
-    rand::thread_rng().fill_bytes(&mut raw);
+    rand::rng().fill_bytes(&mut raw);
     Ok(hex::encode(raw))
 }
 

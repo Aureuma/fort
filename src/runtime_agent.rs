@@ -149,7 +149,7 @@ pub fn compute_next_sleep(
     }
     if !jitter.is_zero() {
         let max = jitter.as_nanos() as i128;
-        let jitter_ns = rand::thread_rng().gen_range(-max..=max);
+        let jitter_ns = rand::rng().random_range(-max..=max);
         if jitter_ns >= 0 {
             base += Duration::from_nanos(jitter_ns as u64);
         } else {
