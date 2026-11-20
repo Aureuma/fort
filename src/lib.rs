@@ -4,6 +4,7 @@ pub mod config;
 pub mod github_auth;
 pub mod hostcfg;
 pub mod model;
+pub mod r2;
 pub mod runtime_agent;
 pub mod server;
 pub mod sigpipe;
