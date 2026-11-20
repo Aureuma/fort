@@ -35,6 +35,7 @@ use crate::model::{Binding, Operation};
 #[derive(Parser)]
 #[command(
     name = "fort",
+    version,
     about = "Policy and authentication API for Vault secret operations",
     long_about = "Fort is the only door to secret material: it authenticates, authorizes repo/env/op access, and routes secret operations to Vault-encrypted safe data.\n\nHost resolution (first match wins): --host, FORT_HOST, ~/.fort/settings.toml [fort].host.\nAuthentication: --token-file, else the managed session in $FORT_SESSION_DIR (default ~/.fort/session/). See `fort auth github login` to start a session."
 )]

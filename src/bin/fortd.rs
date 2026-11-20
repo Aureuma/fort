@@ -1,10 +1,11 @@
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use std::path::PathBuf;
 use std::sync::Arc;
 
 #[derive(Parser)]
 #[command(
     name = "fortd",
+    version,
     about = "Run the Fort policy/authentication API server",
     long_about = "Serve the Fort v1 API: bearer-token auth, repo/env/op policy checks, and Vault-backed secret operations. Configuration comes from --config-file or the environment."
 )]
@@ -14,6 +15,14 @@ struct FortdCli {
         help = "TOML config file (else read configuration from the environment)"
     )]
     config_file: Option<PathBuf>,
+    #[command(subcommand)]
+    command: Option<FortdCommand>,
+}
+
+#[derive(Subcommand)]
+enum FortdCommand {
+    #[command(about = "Print the server version (does not start the server)")]
+    Version,
 }
 
 fn main() {
@@ -25,6 +34,10 @@ fn main() {
 
 fn run() -> anyhow::Result<()> {
     let cli = FortdCli::parse();
+    if matches!(cli.command, Some(FortdCommand::Version)) {
+        println!("{}", env!("CARGO_PKG_VERSION"));
+        return Ok(());
+    }
     let config = match cli.config_file.as_deref() {
         Some(path) => fort::config::Config::from_file(path)?,
         None => fort::config::Config::from_env()?,
