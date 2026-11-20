@@ -9,7 +9,7 @@
 //! from, so callers select the parent by its fort-safe key.
 
 use chrono::Utc;
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
