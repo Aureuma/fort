@@ -12,6 +12,7 @@ use serde_json::json;
 #[derive(Parser)]
 #[command(
     name = "fort-seed",
+    version,
     about = "Seed isolated Fort test fixtures (tests only, never shipped)",
     long_about = "Create throwaway Fort state for integration tests: an admin agent with wildcard policy, workload agents, a canonical vault keyring, and a signing key. Prints the admin token to stdout. Configuration is environment-only: STATE_PATH, KEYRING_PATH, SIGNING_KEY_PATH, and comma-separated PROFILE_IDS."
 )]

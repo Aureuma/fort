@@ -10,6 +10,7 @@ use fort::store::Store;
 #[derive(Debug, Parser)]
 #[command(
     name = "fort-breakglass",
+    version,
     about = "Mint an emergency break-glass admin token from local state",
     long_about = "Direct-to-state recovery tool for operators locked out of the API: issues a short-lived admin token using the Fort state file and JWT signing key on disk. Requires local access to both files; reissue revokes prior break-glass tokens."
 )]

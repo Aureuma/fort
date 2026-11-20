@@ -24,6 +24,7 @@ const MATRIX_TARGETS: [(&str, &str); 4] = [
 #[derive(Parser)]
 #[command(
     name = "fort-release",
+    version,
     about = "Dev-only Fort release helper (never shipped)",
     long_about = "Build, verify, and smoke Fort release artifacts from the canonical Cargo.toml version. Groups: self (version gate, asset build/verify), installer (host and Homebrew smokes), homebrew (tap formula rendering)."
 )]
@@ -40,6 +41,8 @@ enum TopCommand {
     Installer(InstallerCommand),
     #[command(about = "Homebrew tap operations")]
     Homebrew(HomebrewCommand),
+    #[command(about = "Print the release helper version")]
+    Version,
 }
 
 #[derive(Args)]
@@ -177,6 +180,10 @@ fn run() -> Result<()> {
                 Ok(())
             }
         },
+        TopCommand::Version => {
+            println!("{}", canonical_version());
+            Ok(())
+        }
     }
 }
 
