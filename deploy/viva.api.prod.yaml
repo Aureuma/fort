@@ -18,8 +18,8 @@ service:
     profile: disabled
   keep_previous: false
   build:
-    context: /home/shawn/Development/fort
-    dockerfile: /home/shawn/Development/fort/Dockerfile
+    context: ..
+    dockerfile: ../Dockerfile
   networks:
     - viva-shared
     - si

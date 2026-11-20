@@ -14,8 +14,8 @@ service:
     profile: disabled
   keep_previous: false
   build:
-    context: /home/shawn/Development/fort
-    dockerfile: /home/shawn/Development/fort/Dockerfile
+    context: ..
+    dockerfile: ../Dockerfile
   ports:
     - host: "0.0.0.0:18089"
       container: 8088
