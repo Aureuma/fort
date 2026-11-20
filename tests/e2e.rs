@@ -1627,6 +1627,99 @@ fn fortd_version_reports_without_config() {
 }
 
 #[test]
+fn cli_errors_print_full_chain() {
+    // Top-level mains must print `{error:#}` (full anyhow chain), not
+    // `{error}` (outermost context only), so inner details like HTTP
+    // statuses and OS errors survive in logs.
+    let temp = TempDir::new().expect("tempdir");
+    let missing = temp.path().join("does-not-exist");
+    let missing_str = missing.to_string_lossy().to_string();
+
+    let fort = std::env::var("CARGO_BIN_EXE_fort").expect("fort path");
+    let output = Command::new(&fort)
+        .args([
+            "--host",
+            "http://127.0.0.1:1",
+            "--token-file",
+            &missing_str,
+            "doctor",
+        ])
+        .env_remove("FORT_TOKEN_PATH")
+        .env_remove("FORT_BOOTSTRAP_TOKEN_FILE")
+        .output()
+        .expect("run fort doctor with missing token file");
+    assert!(
+        !output.status.success(),
+        "fort doctor unexpectedly succeeded with a missing token file"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    assert!(
+        stderr.contains("No such file or directory"),
+        "fort hid the inner error: {stderr}"
+    );
+
+    let fortd = std::env::var("CARGO_BIN_EXE_fortd").expect("fortd path");
+    let output = Command::new(&fortd)
+        .args(["--config-file", &missing_str])
+        .output()
+        .expect("run fortd with missing config file");
+    assert!(
+        !output.status.success(),
+        "fortd unexpectedly succeeded with a missing config file"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    assert!(
+        stderr.contains("read config") && stderr.contains("No such file or directory"),
+        "fortd hid the inner error: {stderr}"
+    );
+
+    let agent = std::env::var("CARGO_BIN_EXE_fort-agent").expect("fort-agent path");
+    let output = Command::new(&agent)
+        .args([
+            "--host",
+            "http://127.0.0.1:1",
+            "--refresh-token-file",
+            &missing_str,
+            "--token-path",
+            &temp.path().join("access.token").to_string_lossy(),
+            "--once",
+        ])
+        .env_remove("FORT_HOST")
+        .env_remove("FORT_REFRESH_TOKEN_FILE")
+        .output()
+        .expect("run fort-agent with missing refresh token file");
+    assert!(
+        !output.status.success(),
+        "fort-agent unexpectedly succeeded with a missing refresh token file"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    assert!(
+        stderr.contains("No such file or directory"),
+        "fort-agent hid the inner error: {stderr}"
+    );
+
+    let seed = std::env::var("CARGO_BIN_EXE_fort-seed").expect("fort-seed path");
+    let corrupt = temp.path().join("corrupt-state.json");
+    fs::write(&corrupt, "not-json").expect("write corrupt state");
+    let output = Command::new(&seed)
+        .env("STATE_PATH", &corrupt)
+        .env("KEYRING_PATH", temp.path().join("keyring.json"))
+        .env("SIGNING_KEY_PATH", temp.path().join("signing.key"))
+        .env("PROFILE_IDS", "")
+        .output()
+        .expect("run fort-seed with corrupt state");
+    assert!(
+        !output.status.success(),
+        "fort-seed unexpectedly succeeded with corrupt state"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    assert!(
+        stderr.contains("decode state") && stderr.contains("line 1 column"),
+        "fort-seed hid the inner error: {stderr}"
+    );
+}
+
+#[test]
 fn fort_breakglass_issues_single_active_admin_token() {
     let temp = TempDir::new().expect("tempdir");
     let state_dir = temp.path().join("state");
