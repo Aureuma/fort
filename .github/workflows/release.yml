@@ -195,7 +195,7 @@ jobs:
 
       - name: Attest release artifacts
         if: needs.resolve-tag.outputs.publish == 'true'
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: |
             dist/*.tar.gz
