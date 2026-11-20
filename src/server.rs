@@ -161,6 +161,7 @@ fn router(state: AppState) -> Router {
         .route("/v1/secrets/batch-get", post(handle_secret_batch_get))
         .route("/v1/secrets/list", post(handle_secret_list))
         .route("/v1/secrets/set", post(handle_secret_set))
+        .route("/v1/r2/temp-credentials", post(handle_r2_temp_credentials))
         .route("/v1/scopes/ensure", post(handle_scope_ensure))
         .route("/v1/run/session/open", post(handle_run_session_open))
         .route(
@@ -979,6 +980,208 @@ async fn handle_secret_get(
         "version": 1,
         "retrieved_at": Utc::now(),
     })))
+}
+
+#[derive(Deserialize)]
+struct R2TempCredentialsRequest {
+    bucket: String,
+    permission: String,
+    #[serde(default)]
+    ttl_seconds: Option<u64>,
+    #[serde(default)]
+    prefixes: Vec<String>,
+    #[serde(default)]
+    objects: Vec<String>,
+    parent_repo: String,
+    parent_env: String,
+    parent_key: String,
+    #[serde(default)]
+    dry_run: bool,
+}
+
+async fn handle_r2_temp_credentials(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<R2TempCredentialsRequest>,
+) -> Result<Json<Value>, ApiError> {
+    let actor = require_actor(&headers, &state)?;
+    let r2 = &state.config.r2;
+    if !r2.enabled() {
+        return Err(ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "r2 issuer is not configured",
+        ));
+    }
+    let bucket = request.bucket.trim();
+    let permission = request.permission.trim();
+    let parent_repo = request.parent_repo.trim();
+    let parent_env = request.parent_env.trim();
+    let parent_key = request.parent_key.trim();
+    if bucket.is_empty() || parent_repo.is_empty() || parent_env.is_empty() || parent_key.is_empty()
+    {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "bucket, parent_repo, parent_env, and parent_key are required",
+        ));
+    }
+    if !crate::r2::is_valid_permission(permission) {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "permission must be admin-read-write, admin-read-only, object-read-write, or object-read-only",
+        ));
+    }
+    let ttl_seconds = request.ttl_seconds.unwrap_or(3600);
+    if ttl_seconds == 0 || ttl_seconds > crate::r2::MAX_TEMP_CREDENTIAL_TTL_SECONDS {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "ttl_seconds must be between 1 and 604800",
+        ));
+    }
+    for (allowed, reason) in [
+        state.store.check_permission(
+            &actor.agent_id,
+            &r2.issuer_repo,
+            &r2.issuer_env,
+            Operation::Get,
+        ),
+        state
+            .store
+            .check_permission(&actor.agent_id, parent_repo, parent_env, Operation::Get),
+    ] {
+        if !allowed {
+            add_audit(
+                &state,
+                &actor.agent_id,
+                "r2_temp_credentials",
+                bucket,
+                permission,
+                parent_key,
+                "deny",
+                reason,
+            );
+            return Err(ApiError::new(StatusCode::FORBIDDEN, "forbidden"));
+        }
+    }
+    let issuer_token = state
+        .vault
+        .get(&r2.issuer_repo, &r2.issuer_env, &r2.issuer_token_key)
+        .map_err(|error| match error {
+            VaultError::NotFound => ApiError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "r2 issuer token is not stored",
+            ),
+            _ => ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to read r2 issuer token",
+            ),
+        })?
+        .trim()
+        .to_string();
+    let parent_access_key_id = state
+        .vault
+        .get(parent_repo, parent_env, parent_key)
+        .map_err(|error| match error {
+            VaultError::NotFound => {
+                ApiError::new(StatusCode::NOT_FOUND, "parent access key not found")
+            }
+            VaultError::Invalid => {
+                ApiError::new(StatusCode::BAD_REQUEST, "invalid parent access key target")
+            }
+            _ => ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to read parent access key",
+            ),
+        })?
+        .trim()
+        .to_string();
+    let detail = format!("ttl={}s parent={}", ttl_seconds, parent_key);
+    if request.dry_run {
+        add_audit(
+            &state,
+            &actor.agent_id,
+            "r2_temp_credentials",
+            bucket,
+            permission,
+            &detail,
+            "allow",
+            "dry_run",
+        );
+        return Ok(Json(json!({
+            "dry_run": true,
+            "bucket": bucket,
+            "permission": permission,
+            "ttl_seconds": ttl_seconds,
+            "parent_repo": parent_repo,
+            "parent_env": parent_env,
+            "parent_key": parent_key,
+        })));
+    }
+    let api_base = state.config.r2.api_base.clone();
+    let account_id = state.config.r2.account_id.clone();
+    let audit_bucket = bucket.to_string();
+    let audit_permission = permission.to_string();
+    let bucket = bucket.to_string();
+    let permission = permission.to_string();
+    let prefixes = request.prefixes;
+    let objects = request.objects;
+    let issued = tokio::task::spawn_blocking(move || {
+        let request = crate::r2::TempCredentialsRequest {
+            issuer_token: &issuer_token,
+            account_id: &account_id,
+            parent_access_key_id: &parent_access_key_id,
+            bucket: &bucket,
+            permission: &permission,
+            ttl_seconds,
+            prefixes: &prefixes,
+            objects: &objects,
+        };
+        crate::r2::issue_temp_credentials(&api_base, &request)
+    })
+    .await
+    .map_err(|_| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "r2 issuance task failed"))?;
+    match issued {
+        Ok(result) => {
+            add_audit(
+                &state,
+                &actor.agent_id,
+                "r2_temp_credentials",
+                &audit_bucket,
+                &audit_permission,
+                &detail,
+                "allow",
+                "",
+            );
+            let expires_at = Utc::now() + chrono::Duration::seconds(ttl_seconds as i64);
+            Ok(Json(json!({
+                "access_key_id": result.access_key_id,
+                "secret_access_key": result.secret_access_key,
+                "session_token": result.session_token,
+                "bucket": audit_bucket,
+                "permission": audit_permission,
+                "ttl_seconds": ttl_seconds,
+                "parent_repo": parent_repo,
+                "parent_env": parent_env,
+                "parent_key": parent_key,
+                "expires_at": expires_at,
+            })))
+        }
+        Err(error) => {
+            add_audit(
+                &state,
+                &actor.agent_id,
+                "r2_temp_credentials",
+                &audit_bucket,
+                &audit_permission,
+                &detail,
+                "deny",
+                &format!("cloudflare: {}", error.detail),
+            );
+            Err(ApiError::new(
+                StatusCode::BAD_GATEWAY,
+                format!("cloudflare r2: {}", error.detail),
+            ))
+        }
+    }
 }
 
 #[derive(Deserialize)]
