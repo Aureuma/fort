@@ -14,3 +14,10 @@ updates:
     open-pull-requests-limit: 5
     labels:
       - dependencies
+    # The dtolnay/rust-toolchain ref selects the CI Rust toolchain
+    # (upstream publishes branches per Rust release, including ones for
+    # Rust versions that do not exist yet). Toolchain moves must stay
+    # deliberate: bump rust-version, rust-toolchain.toml, and every
+    # dtolnay/rust-toolchain ref together, never via dependabot.
+    ignore:
+      - dependency-name: dtolnay/rust-toolchain
