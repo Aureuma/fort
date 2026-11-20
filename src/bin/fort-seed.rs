@@ -21,7 +21,7 @@ fn main() {
     fort::sigpipe::restore_default();
     let _cli = Cli::parse();
     if let Err(error) = run() {
-        eprintln!("{error}");
+        eprintln!("{error:#}");
         std::process::exit(1);
     }
 }
