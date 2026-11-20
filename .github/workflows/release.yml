@@ -79,7 +79,7 @@ jobs:
             rust_target: aarch64-apple-darwin
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.resolve-tag.outputs.checkout_ref }}
 
@@ -123,7 +123,7 @@ jobs:
           ls -lah dist
 
       - name: Upload target archive artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: fort-release-${{ matrix.target }}
           path: dist/*.tar.gz
@@ -135,12 +135,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.resolve-tag.outputs.checkout_ref }}
 
       - name: Download target archives
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           pattern: fort-release-*
           path: dist
@@ -174,7 +174,7 @@ jobs:
           echo "release archives verified for ${tag}"
 
       - name: Upload combined release dist artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: fort-release-dist
           path: |
@@ -195,7 +195,7 @@ jobs:
 
       - name: Attest release artifacts
         if: needs.resolve-tag.outputs.publish == 'true'
-        uses: actions/attest-build-provenance@v2
+        uses: actions/attest-build-provenance@v4
         with:
           subject-path: |
             dist/*.tar.gz
@@ -234,7 +234,7 @@ jobs:
 
       - name: Checkout
         if: steps.gate.outputs.enabled == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.resolve-tag.outputs.checkout_ref }}
 
@@ -244,7 +244,7 @@ jobs:
 
       - name: Download verified release dist
         if: steps.gate.outputs.enabled == 'true'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: fort-release-dist
           path: dist
