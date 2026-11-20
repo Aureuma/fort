@@ -260,7 +260,7 @@ fn is_admin_agent(state: &AppState, agent_id: &str) -> bool {
 
 fn random_id(prefix: &str) -> String {
     let mut raw = [0u8; 12];
-    rand::thread_rng().fill_bytes(&mut raw);
+    rand::rng().fill_bytes(&mut raw);
     format!("{prefix}{}", hex::encode(raw))
 }
 
