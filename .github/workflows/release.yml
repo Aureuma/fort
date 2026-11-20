@@ -79,7 +79,7 @@ jobs:
             rust_target: aarch64-apple-darwin
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.resolve-tag.outputs.checkout_ref }}
 
@@ -135,7 +135,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.resolve-tag.outputs.checkout_ref }}
 
@@ -234,7 +234,7 @@ jobs:
 
       - name: Checkout
         if: steps.gate.outputs.enabled == 'true'
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           ref: ${{ needs.resolve-tag.outputs.checkout_ref }}
 
