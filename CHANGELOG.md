@@ -13,6 +13,17 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Removed
+
+- Removed all GitHub Actions workflows (CI, install smoke, release assets);
+  `scripts/local-gates.sh` (plus `make gates`) is now the enforced local
+  gate for checks, tests, smokes, and release-asset builds.
+
+### Fixed
+
+- Fixed `fort-release` host-smoke and asset builds preferring a stale
+  `target/` binary over the configured `.artifacts/cargo-target` output.
+
 ### Changed
 
 - Renamed the container R2 issuer key reference from

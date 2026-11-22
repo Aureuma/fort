@@ -71,7 +71,7 @@ git switch main
 git pull --ff-only
 ```
 
-- Ensure CI is green on `main`.
+- Run local gates green on `main` (`./scripts/local-gates.sh all`; Fort runs zero GitHub Actions).
 - Ensure you can push tags and create GitHub releases.
 - Ensure the working tree is clean and the branch is up to date.
 - Make sure you have all remote tags locally before picking the next version.
@@ -265,27 +265,30 @@ git push origin :refs/tags/vX.Y.Z
 git fetch --tags --prune origin
 ```
 
-### 9) Verify automated release assets
+### 9) Build and publish release assets locally
 
-When a GitHub Release is published, workflow
-`.github/workflows/release.yml` builds and uploads release archives
-automatically, then:
+Fort runs zero GitHub Actions: there is no release workflow. The maintainer
+builds, verifies, uploads, and taps locally after publishing the GitHub
+Release entry:
 
-- updates the Homebrew tap formula in `Aureuma/homebrew-fort` (when
-  `HOMEBREW_TAP_PUSH_TOKEN` is configured, with fallback to
-  `GH_PAT_AUREUMA` when that token has tap push access)
-- verifies release assets + Homebrew sync in a final gate job
-- runs a macOS Homebrew smoke install lane through
-  `fort-release installer smoke-homebrew`
+```
+./scripts/local-gates.sh release
+gh release view vX.Y.0 --repo Aureuma/fort --json assets --jq '.assets[].name'
+```
 
-Supported targets:
+1. Build + verify the current-host archive:
+   `cargo run --quiet --locked --bin fort-release -- self assets --out-dir dist`
+   then `... self verify --version vX.Y.0 --out-dir dist`.
+2. Upload the archives to the release:
+   `gh release upload vX.Y.0 dist/*.tar.gz dist/checksums.txt --repo Aureuma/fort --clobber`.
+3. Update the Homebrew tap formula in `Aureuma/homebrew-fort` (requires a
+   tap push token), then verify sync:
 
-- `linux/amd64`
-- `linux/arm64`
-- `darwin/amd64`
-- `darwin/arm64`
+```
+curl -fsSL https://raw.githubusercontent.com/Aureuma/homebrew-fort/main/Formula/fort.rb | grep -n 'version "'
+```
 
-Expected assets:
+Expected assets (one archive per target plus checksums):
 
 - `fort_<version>_linux_amd64.tar.gz`
 - `fort_<version>_linux_arm64.tar.gz`
@@ -293,29 +296,16 @@ Expected assets:
 - `fort_<version>_darwin_arm64.tar.gz`
 - `checksums.txt`
 
-Verification commands:
-
-```
-gh run list --workflow "Release Assets" --repo Aureuma/fort --limit 1
-gh release view vX.Y.0 --repo Aureuma/fort --json assets --jq '.assets[].name'
-```
-
-Verify Homebrew tap formula version:
-
-```
-curl -fsSL https://raw.githubusercontent.com/Aureuma/homebrew-fort/main/Formula/fort.rb | grep -n 'version "'
-```
-
 Notes:
 
-- The workflow validates that the `Cargo.toml` version matches the
-  release tag.
-- Release assets are built by explicit GitHub Actions target jobs for
-  Linux AMD64, Linux ARM64, macOS AMD64, and macOS ARM64.
-- `fort-release self verify` checks checksums, archive contents, and
-  binary format before upload.
-- A failed workflow means release notes/tag were published, but binary
-  assets were not fully attached.
+- Multi-arch archives must be built on matching hosts (or cross-compiled
+  with the matching `--target`); `fort-release self assets` packages the
+  current host only.
+- Validate the tag first: `fort-release self validate-version --tag vX.Y.0`.
+- `fort-release self verify` checks checksums, archive contents, and the
+  reported binary version before upload.
+- If assets are missing after the release entry exists, the release notes
+  shipped but the binaries did not: re-run the local build and upload.
 - Use `cargo run --quiet --locked --bin fort-release -- homebrew
   render-tap-formula --version vX.Y.0 --checksums <file|url>
   --tap-dir <dir>` to refresh tap formula metadata; it defaults to the

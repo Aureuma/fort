@@ -295,8 +295,10 @@ fn release_bin_dir() -> Result<PathBuf> {
     if let Ok(dir) = std::env::var("CARGO_TARGET_DIR") {
         candidates.push(PathBuf::from(dir).join("release"));
     }
-    candidates.push(PathBuf::from("target/release"));
+    // `.cargo/config.toml` points the target dir at `.artifacts/cargo-target`;
+    // check there before the default `target` dir so stale binaries never win.
     candidates.push(PathBuf::from(".artifacts/cargo-target/release"));
+    candidates.push(PathBuf::from("target/release"));
     for candidate in &candidates {
         if RELEASE_BINS.iter().all(|bin| candidate.join(bin).is_file()) {
             return Ok(candidate.clone());
@@ -467,9 +469,11 @@ fn cmd_verify(args: &VerifyArgs) -> Result<()> {
 
 fn cmd_smoke_host() -> Result<()> {
     run_step("cargo", &["build", "--locked", "--bin", "fort"], None)?;
+    // `.cargo/config.toml` points the target dir at `.artifacts/cargo-target`;
+    // check there first so a stale `target/debug` binary never wins.
     let candidates = [
-        PathBuf::from("target/debug/fort"),
         PathBuf::from(".artifacts/cargo-target/debug/fort"),
+        PathBuf::from("target/debug/fort"),
     ];
     let fort = candidates
         .into_iter()
