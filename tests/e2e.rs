@@ -1591,6 +1591,55 @@ fn fort_version_flag_agrees_with_subcommand() {
 }
 
 #[test]
+fn fort_doctor_resolves_host_from_settings_file() {
+    // Regression test for fort#38: `[fort] host` in settings.toml must
+    // resolve without --host/FORT_HOST.
+    let temp = TempDir::new().expect("tempdir");
+    let settings = temp.path().join("settings.toml");
+    fs::write(&settings, "[fort]\nhost = \"http://127.0.0.1:1\"\n").expect("write settings");
+    let empty_session_dir = temp.path().join("session");
+    fs::create_dir_all(&empty_session_dir).expect("session dir");
+
+    let fort = std::env::var("CARGO_BIN_EXE_fort").expect("fort path");
+    let output = Command::new(&fort)
+        .arg("doctor")
+        .env_remove("FORT_HOST")
+        .env("FORT_SETTINGS_FILE", &settings)
+        .env("FORT_SESSION_DIR", &empty_session_dir)
+        .env_remove("FORT_TOKEN_PATH")
+        .env_remove("FORT_BOOTSTRAP_TOKEN_FILE")
+        .output()
+        .expect("run fort doctor");
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    assert!(
+        !stderr.contains("fort host is required"),
+        "host was not resolved from settings.toml: {stderr}"
+    );
+
+    // Control: with no settings file at all, the same invocation must still
+    // report host-required.
+    let missing = temp.path().join("does-not-exist.toml");
+    let output = Command::new(&fort)
+        .arg("doctor")
+        .env_remove("FORT_HOST")
+        .env("FORT_SETTINGS_FILE", &missing)
+        .env("FORT_SESSION_DIR", &empty_session_dir)
+        .env_remove("FORT_TOKEN_PATH")
+        .env_remove("FORT_BOOTSTRAP_TOKEN_FILE")
+        .output()
+        .expect("run fort doctor without settings");
+    assert!(
+        !output.status.success(),
+        "fort doctor unexpectedly succeeded with no host anywhere"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    assert!(
+        stderr.contains("fort host is required"),
+        "expected host-required error, got: {stderr}"
+    );
+}
+
+#[test]
 fn fortd_version_reports_without_config() {
     let fortd = std::env::var("CARGO_BIN_EXE_fortd").expect("fortd path");
     let output = Command::new(&fortd)
