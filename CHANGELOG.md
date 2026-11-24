@@ -13,6 +13,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [v1.6.1] - 2026-11-24
+
 ### Fixed
 
 - Fixed Gemini `list_keys` silently dropping keys beyond the first page;
