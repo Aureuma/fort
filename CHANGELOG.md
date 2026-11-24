@@ -13,6 +13,11 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed Gemini `list_keys` silently dropping keys beyond the first page;
+  it now follows `nextPageToken` (`pageSize=100`) until exhausted.
+
 ## [v1.6.0] - 2026-11-24
 
 ### Added

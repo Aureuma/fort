@@ -333,36 +333,73 @@ pub fn get_key(
     Ok(KeySummary { name, display_name })
 }
 
-/// Blocking call: GET /v2/projects/{project}/locations/global/keys.
+/// Blocking call: GET /v2/projects/{project}/locations/global/keys (all pages).
+/// Follows `nextPageToken` until exhausted so keys beyond the first page are
+/// never silently dropped. A repeated token ends the loop defensively.
 pub fn list_keys(
     api_base: &str,
     bearer: &str,
     project: &str,
 ) -> Result<Vec<KeySummary>, GeminiError> {
-    let path = format!("/v2/projects/{}/locations/global/keys", project.trim());
-    let payload = provider_get(api_base, bearer, &path)?;
+    const LIST_PAGE_SIZE: u32 = 100;
     let mut keys = Vec::new();
-    if let Some(items) = payload.get("keys").and_then(|keys| keys.as_array()) {
-        for item in items {
-            let name = item
-                .get("name")
-                .and_then(|name| name.as_str())
-                .unwrap_or_default()
-                .to_string();
-            if name.is_empty() {
-                continue;
-            }
-            keys.push(KeySummary {
-                name,
-                display_name: item
-                    .get("displayName")
+    let mut page_token = String::new();
+    loop {
+        let mut path = format!(
+            "/v2/projects/{}/locations/global/keys?pageSize={LIST_PAGE_SIZE}",
+            project.trim()
+        );
+        if !page_token.is_empty() {
+            path.push_str("&pageToken=");
+            path.push_str(&encode_query_value(&page_token));
+        }
+        let payload = provider_get(api_base, bearer, &path)?;
+        if let Some(items) = payload.get("keys").and_then(|keys| keys.as_array()) {
+            for item in items {
+                let name = item
+                    .get("name")
                     .and_then(|name| name.as_str())
                     .unwrap_or_default()
-                    .to_string(),
-            });
+                    .to_string();
+                if name.is_empty() {
+                    continue;
+                }
+                keys.push(KeySummary {
+                    name,
+                    display_name: item
+                        .get("displayName")
+                        .and_then(|name| name.as_str())
+                        .unwrap_or_default()
+                        .to_string(),
+                });
+            }
         }
+        let next = payload
+            .get("nextPageToken")
+            .and_then(|token| token.as_str())
+            .unwrap_or_default();
+        if next.is_empty() || next == page_token {
+            break;
+        }
+        page_token = next.to_string();
     }
     Ok(keys)
+}
+
+/// Percent-encodes a query value (RFC 3986 unreserved set passes through)
+/// without adding a dependency; page tokens are opaque and may carry
+/// reserved characters.
+fn encode_query_value(value: &str) -> String {
+    const UNRESERVED: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-._~";
+    let mut encoded = String::with_capacity(value.len());
+    for byte in value.bytes() {
+        if UNRESERVED.contains(&byte) {
+            encoded.push(byte as char);
+        } else {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    encoded
 }
 
 /// Blocking call: DELETE /v2/{key}. The delete returns an operation; a
@@ -520,7 +557,10 @@ mod tests {
                 } else if start.starts_with("GET /v2/projects/p/locations/global/keys/k1 ") {
                     r#"{"name":"projects/p/locations/global/keys/k1","displayName":"fort-test"}"#
                         .to_string()
-                } else if start.starts_with("GET /v2/projects/p/locations/global/keys ") {
+                } else if start.starts_with("GET /v2/projects/p/locations/global/keys?pageSize=")
+                    || start.starts_with("GET /v2/projects/p/locations/global/keys ")
+                    || start == "GET /v2/projects/p/locations/global/keys HTTP/1.1"
+                {
                     r#"{"keys":[{"name":"projects/p/locations/global/keys/k1","displayName":"fort-test"}]}"#.to_string()
                 } else if start.starts_with("DELETE /v2/projects/p/locations/global/keys/k1 ")
                     || start.starts_with("GET /v2/operations/del1 ")
@@ -587,6 +627,58 @@ mod tests {
             get_key(&base, "sa-token", "projects/p/locations/global/keys/k1").expect("get");
         assert_eq!(summary.display_name, "fort-test");
         delete_key(&base, "sa-token", "projects/p/locations/global/keys/k1").expect("delete");
+    }
+
+    #[test]
+    fn list_follows_next_page_token_until_exhausted() {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock gemini pages");
+        let base = format!("http://{}", listener.local_addr().expect("mock addr"));
+        let seen: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let recorded = Arc::clone(&seen);
+        std::thread::spawn(move || {
+            for _ in 0..2 {
+                let (mut stream, _) = listener.accept().expect("accept mock gemini pages");
+                let mut raw = vec![0u8; 8192];
+                let Ok(read) = stream.read(&mut raw) else {
+                    break;
+                };
+                let head = String::from_utf8_lossy(&raw[..read]).to_string();
+                let start = head.lines().next().unwrap_or_default().to_string();
+                recorded.lock().expect("lock").push(start.clone());
+                let body = if start.contains("pageToken=") {
+                    r#"{"keys":[{"name":"projects/p/locations/global/keys/k2","displayName":"second"}]}"#
+                } else {
+                    r#"{"keys":[{"name":"projects/p/locations/global/keys/k1","displayName":"first"}],"nextPageToken":"tok-2"}"#
+                };
+                let head = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = stream.write_all(format!("{head}{body}").as_bytes());
+            }
+        });
+        let keys = list_keys(&base, "sa-token", "p").expect("paged list");
+        assert_eq!(keys.len(), 2);
+        assert_eq!(keys[0].name, "projects/p/locations/global/keys/k1");
+        assert_eq!(keys[1].name, "projects/p/locations/global/keys/k2");
+        assert_eq!(keys[1].display_name, "second");
+        let seen = seen.lock().expect("lock").clone();
+        assert_eq!(seen.len(), 2, "both pages must be fetched: {seen:?}");
+        assert!(seen[0].contains("pageSize=100"), "first page: {seen:?}");
+        assert!(
+            !seen[0].contains("pageToken="),
+            "first page sends no token: {seen:?}"
+        );
+        assert!(
+            seen[1].contains("pageToken=tok-2"),
+            "second page resumes: {seen:?}"
+        );
+    }
+
+    #[test]
+    fn encode_query_value_leaves_unreserved_and_escapes_reserved() {
+        assert_eq!(encode_query_value("tok-2_~.x"), "tok-2_~.x");
+        assert_eq!(encode_query_value("a/b+c"), "a%2Fb%2Bc");
     }
 
     /// Live probe against the real Google API. Gated: runs only when
