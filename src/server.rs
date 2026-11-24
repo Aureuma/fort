@@ -1349,7 +1349,6 @@ async fn handle_gemini_keys_issue(
         ));
     }
     check_gemini_mint_policy(&state, &actor, &store_repo, &store_env)?;
-    let minter = read_gemini_minter_token(&state)?;
     if request.dry_run {
         add_audit(
             &state,
@@ -1370,6 +1369,7 @@ async fn handle_gemini_keys_issue(
             "rotation": gemini_advisory(&state),
         })));
     }
+    let minter = read_gemini_minter_token(&state)?;
     let api_base = state.config.gemini.api_base.clone();
     let project = state.config.gemini.project_id.clone();
     let issued = tokio::task::spawn_blocking(move || {
@@ -1539,7 +1539,6 @@ async fn handle_gemini_keys_rotate(
     check_gemini_mint_policy(&state, &actor, &store_repo, &store_env)?;
     let old_resource = crate::gemini::key_resource(&state.config.gemini.project_id, &key_name)
         .map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, error.detail))?;
-    let minter = read_gemini_minter_token(&state)?;
     if request.dry_run {
         add_audit(
             &state,
@@ -1560,6 +1559,7 @@ async fn handle_gemini_keys_rotate(
             "rotation": gemini_advisory(&state),
         })));
     }
+    let minter = read_gemini_minter_token(&state)?;
     let api_base = state.config.gemini.api_base.clone();
     let project = state.config.gemini.project_id.clone();
     let rotated = tokio::task::spawn_blocking(move || {
@@ -1642,7 +1642,6 @@ async fn handle_gemini_keys_revoke(
     }
     let resource = crate::gemini::key_resource(&gemini.project_id, &request.key_name)
         .map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, error.detail))?;
-    let minter = read_gemini_minter_token(&state)?;
     if request.dry_run {
         add_audit(
             &state,
@@ -1657,8 +1656,10 @@ async fn handle_gemini_keys_revoke(
         return Ok(Json(json!({
             "dry_run": true,
             "key_name": resource,
+            "rotation": gemini_advisory(&state),
         })));
     }
+    let minter = read_gemini_minter_token(&state)?;
     let api_base = state.config.gemini.api_base.clone();
     let revoked = tokio::task::spawn_blocking(move || {
         crate::gemini::delete_key(&api_base, &minter, &resource)
@@ -1685,6 +1686,7 @@ async fn handle_gemini_keys_revoke(
             Ok(Json(json!({
                 "revoked": true,
                 "key_name": request.key_name.trim(),
+                "rotation": gemini_advisory(&state),
             })))
         }
         Err(error) => {

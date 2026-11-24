@@ -264,7 +264,9 @@ pub fn poll_operation_key(
     }
     Err(GeminiError {
         status: 502,
-        detail: format!("timed out waiting for google operation {operation}"),
+        detail: format!(
+            "timed out waiting for google operation {operation}; the key may have been created — list keys and check by displayName, then delete it by hand if needed"
+        ),
     })
 }
 
@@ -371,7 +373,7 @@ pub fn delete_key(api_base: &str, bearer: &str, key_resource: &str) -> Result<()
     if let Some(operation) = payload.get("name").and_then(|name| name.as_str())
         && !operation.starts_with("projects/")
     {
-        let _ = poll_delete_operation(api_base, bearer, operation);
+        poll_delete_operation(api_base, bearer, operation)?;
     }
     Ok(())
 }
@@ -520,7 +522,9 @@ mod tests {
                         .to_string()
                 } else if start.starts_with("GET /v2/projects/p/locations/global/keys ") {
                     r#"{"keys":[{"name":"projects/p/locations/global/keys/k1","displayName":"fort-test"}]}"#.to_string()
-                } else if start.starts_with("DELETE /v2/projects/p/locations/global/keys/k1 ") {
+                } else if start.starts_with("DELETE /v2/projects/p/locations/global/keys/k1 ")
+                    || start.starts_with("GET /v2/operations/del1 ")
+                {
                     r#"{"name":"operations/del1","done":true}"#.to_string()
                 } else {
                     let payload = r#"{"error":{"message":"not found"}}"#;

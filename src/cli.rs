@@ -471,6 +471,9 @@ struct R2AuditArgs {
     checks: Vec<String>,
 }
 #[derive(Args)]
+#[command(
+    long_about = "Rotation is advisory only and NOT platform-enforced: Gemini API keys stay valid until deleted or rotated."
+)]
 struct GeminiIssueArgs {
     #[arg(long, help = "Display name for the new Gemini API key")]
     key_name: String,
@@ -491,6 +494,9 @@ struct GeminiIssueArgs {
 }
 
 #[derive(Args)]
+#[command(
+    long_about = "Rotation is advisory only and NOT platform-enforced: Gemini API keys stay valid until deleted or rotated."
+)]
 struct GeminiRotateArgs {
     #[arg(long, help = "Current Gemini API key name or resource to replace")]
     key_name: String,
@@ -514,6 +520,9 @@ struct GeminiRotateArgs {
 }
 
 #[derive(Args)]
+#[command(
+    long_about = "Rotation is advisory only and NOT platform-enforced: Gemini API keys stay valid until deleted or rotated."
+)]
 struct GeminiRevokeArgs {
     #[arg(long, help = "Gemini API key name or resource to delete")]
     key_name: String,
@@ -522,12 +531,18 @@ struct GeminiRevokeArgs {
 }
 
 #[derive(Args)]
+#[command(
+    long_about = "Rotation is advisory only and NOT platform-enforced: Gemini API keys stay valid until deleted or rotated."
+)]
 struct GeminiListArgs {
     #[arg(long, help = "Validate policy without contacting Google")]
     dry_run: bool,
 }
 
 #[derive(Args)]
+#[command(
+    long_about = "Rotation is advisory only and NOT platform-enforced: Gemini API keys stay valid until deleted or rotated."
+)]
 struct GeminiValidateArgs {
     #[arg(long, help = "Gemini API key name or resource to check")]
     key_name: String,
@@ -1751,6 +1766,12 @@ impl Client {
             "deleted_key={}",
             response["key_name"].as_str().unwrap_or_default()
         );
+        eprintln!(
+            "# rotation: {}",
+            response["rotation"]["rotation_note"]
+                .as_str()
+                .unwrap_or_default(),
+        );
         Ok(())
     }
 
@@ -1803,6 +1824,12 @@ impl Client {
             "valid={} key_name={}",
             response["valid"].as_bool().unwrap_or(false),
             response["key_name"].as_str().unwrap_or_default(),
+        );
+        eprintln!(
+            "# rotation: {}",
+            response["rotation"]["rotation_note"]
+                .as_str()
+                .unwrap_or_default(),
         );
         Ok(())
     }

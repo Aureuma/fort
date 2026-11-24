@@ -4852,6 +4852,52 @@ fn fort_gemini_keys_gate_config_and_reject_ttl() {
         );
     }
 
+    // --dry-run passes policy/shape without a stored minter credential and
+    // without contacting Google (regression: dry_run used to read the vault
+    // credential first and 503 on these same paths).
+    for args in [
+        vec![
+            "keys",
+            "issue",
+            "gemini",
+            "--key-name",
+            "k",
+            "--store-repo",
+            "safe",
+            "--store-env",
+            "dev",
+            "--dry-run",
+        ],
+        vec![
+            "keys",
+            "rotate",
+            "gemini",
+            "--key-name",
+            "k",
+            "--store-repo",
+            "safe",
+            "--store-env",
+            "dev",
+            "--dry-run",
+        ],
+        vec!["keys", "revoke", "gemini", "--key-name", "k", "--dry-run"],
+        vec!["keys", "list", "gemini", "--dry-run"],
+    ] {
+        let mut full = vec![
+            "--host",
+            host.as_str(),
+            "--token-file",
+            admin_token_path.to_str().unwrap(),
+        ];
+        full.extend(args);
+        let output = Command::new(&fort).args(&full).output().expect("run fort");
+        assert!(
+            output.status.success(),
+            "gemini --dry-run without minter credential must pass: {full:?} stderr: {}",
+            String::from_utf8_lossy(&output.stderr),
+        );
+    }
+
     let _ = child.kill();
     let _ = child.wait();
 }
