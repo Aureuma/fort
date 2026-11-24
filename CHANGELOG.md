@@ -13,6 +13,22 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [v1.6.0] - 2026-11-24
+
+### Added
+
+- Added Gemini (Google AI Studio) API key lifecycle to the unified
+  `fort keys` family: `issue`, `list`, `rotate`, `revoke`, and
+  `validate` for the `gemini` provider, backed by a vault-stored
+  minter credential with `FORT_GEMINI_*` env and `fortd.toml` configuration.
+- Returned Gemini key material once at issuance with audit logging;
+  the 7-day rotation guidance is advisory and not platform-enforced.
+- Rejected caller-supplied TTLs on Gemini issuance and surfaced
+  unconfigured-service (503) plus orphan-key remediation errors from
+  the new `POST /v1/gemini/keys/*` server endpoints.
+- Added `--version`/`-V` flags to the `fort` and `fortd` binaries and
+  `version` subcommands to `fortd` and `fort-release` (#25, #27).
+
 ### Removed
 
 - Removed all GitHub Actions workflows (CI, install smoke, release assets);
@@ -23,6 +39,9 @@ All notable changes to this project will be documented in this file.
 
 - Fixed `fort-release` host-smoke and asset builds preferring a stale
   `target/` binary over the configured `.artifacts/cargo-target` output.
+- Printed the full error chain from top-level CLI mains instead of
+  only the outermost message (#26).
+- Used repo-relative viva build paths in deploy tooling (#24).
 
 ### Changed
 
@@ -32,6 +51,9 @@ All notable changes to this project will be documented in this file.
 - Documented that the `CF_R2_TOKEN_MANAGER` bootstrap credential must
   stay a user token (Cloudflare forbids token-management groups on
   account tokens) and can only be changed from the dashboard.
+- Bumped `jsonwebtoken` from 10.4.0 to 12.0.0 and `toml` from 0.8.23
+  to 1.2.1+spec-1.1.0 as prudent dependency hygiene; no API or
+  behavior impact expected (#22, #23).
 
 ## [v1.5.0] - 2026-11-18
 
