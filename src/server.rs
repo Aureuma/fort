@@ -162,6 +162,14 @@ fn router(state: AppState) -> Router {
         .route("/v1/secrets/list", post(handle_secret_list))
         .route("/v1/secrets/set", post(handle_secret_set))
         .route("/v1/r2/temp-credentials", post(handle_r2_temp_credentials))
+        .route("/v1/gemini/keys/issue", post(handle_gemini_keys_issue))
+        .route("/v1/gemini/keys/list", post(handle_gemini_keys_list))
+        .route("/v1/gemini/keys/rotate", post(handle_gemini_keys_rotate))
+        .route("/v1/gemini/keys/revoke", post(handle_gemini_keys_revoke))
+        .route(
+            "/v1/gemini/keys/validate",
+            post(handle_gemini_keys_validate),
+        )
         .route("/v1/scopes/ensure", post(handle_scope_ensure))
         .route("/v1/run/session/open", post(handle_run_session_open))
         .route(
@@ -1179,6 +1187,598 @@ async fn handle_r2_temp_credentials(
             Err(ApiError::new(
                 StatusCode::BAD_GATEWAY,
                 format!("cloudflare r2: {}", error.detail),
+            ))
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct GeminiKeysIssueRequest {
+    key_name: String,
+    #[serde(default)]
+    display_name: String,
+    store_repo: String,
+    store_env: String,
+    #[serde(default)]
+    ttl_seconds: Option<serde_json::Value>,
+    #[serde(default)]
+    dry_run: bool,
+}
+
+#[derive(Deserialize)]
+struct GeminiKeysRotateRequest {
+    key_name: String,
+    #[serde(default)]
+    display_name: String,
+    store_repo: String,
+    store_env: String,
+    #[serde(default)]
+    ttl_seconds: Option<serde_json::Value>,
+    #[serde(default)]
+    dry_run: bool,
+}
+
+#[derive(Deserialize)]
+struct GeminiKeysRevokeRequest {
+    key_name: String,
+    #[serde(default)]
+    dry_run: bool,
+}
+
+#[derive(Deserialize)]
+struct GeminiKeysValidateRequest {
+    key_name: String,
+}
+
+#[derive(Deserialize)]
+struct GeminiKeysListRequest {
+    #[serde(default)]
+    dry_run: bool,
+}
+
+fn require_gemini_config(state: &AppState) -> Result<(), ApiError> {
+    if state.config.gemini.enabled() {
+        return Ok(());
+    }
+    Err(ApiError::new(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "gemini issuer is not configured",
+    ))
+}
+
+/// Dual policy check for Gemini minting: the caller must hold `Get` on the
+/// minter scope (whose SA token funds the mint) and `Set` on the store scope
+/// (proving it may persist the return-once value itself via `fort set`).
+/// Fort never stores the issued value.
+fn check_gemini_mint_policy(
+    state: &AppState,
+    actor: &ActorContext,
+    store_repo: &str,
+    store_env: &str,
+) -> Result<(), ApiError> {
+    let gemini = &state.config.gemini;
+    for ((allowed, reason_detail), scope, repo, env) in [
+        (
+            state.store.check_permission(
+                &actor.agent_id,
+                &gemini.minter_repo,
+                &gemini.minter_env,
+                Operation::Get,
+            ),
+            "minter scope",
+            gemini.minter_repo.as_str(),
+            gemini.minter_env.as_str(),
+        ),
+        (
+            state.store.check_permission(
+                actor.agent_id.as_str(),
+                store_repo,
+                store_env,
+                Operation::Set,
+            ),
+            "store scope",
+            store_repo,
+            store_env,
+        ),
+    ] {
+        if !allowed {
+            add_audit(
+                state,
+                &actor.agent_id,
+                "gemini_keys_issue",
+                repo,
+                env,
+                store_repo,
+                "deny",
+                &format!("{scope}: {reason_detail}"),
+            );
+            return Err(ApiError::new(StatusCode::FORBIDDEN, "forbidden"));
+        }
+    }
+    Ok(())
+}
+
+fn read_gemini_minter_token(state: &AppState) -> Result<String, ApiError> {
+    let gemini = &state.config.gemini;
+    let minter = state
+        .vault
+        .get(&gemini.minter_repo, &gemini.minter_env, &gemini.minter_key)
+        .map_err(|error| match error {
+            VaultError::NotFound => ApiError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "gemini minter credential is not stored",
+            ),
+            _ => ApiError::new(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "failed to read gemini minter credential",
+            ),
+        })?
+        .trim()
+        .to_string();
+    Ok(minter)
+}
+
+fn gemini_advisory(state: &AppState) -> serde_json::Value {
+    json!({
+        "rotation_days": state.config.gemini.rotation_days,
+        "rotation_note": state.config.gemini.rotation_advisory(),
+    })
+}
+
+async fn handle_gemini_keys_issue(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<GeminiKeysIssueRequest>,
+) -> Result<Json<Value>, ApiError> {
+    let actor = require_actor(&headers, &state)?;
+    require_gemini_config(&state)?;
+    crate::gemini::reject_ttl_seconds(&request.ttl_seconds, state.config.gemini.rotation_days)
+        .map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, error.detail))?;
+    let key_name = request.key_name.trim().to_string();
+    let display_name = if request.display_name.trim().is_empty() {
+        key_name.clone()
+    } else {
+        request.display_name.trim().to_string()
+    };
+    let store_repo = request.store_repo.trim().to_string();
+    let store_env = request.store_env.trim().to_string();
+    if key_name.is_empty() || store_repo.is_empty() || store_env.is_empty() {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "key_name, store_repo, and store_env are required",
+        ));
+    }
+    check_gemini_mint_policy(&state, &actor, &store_repo, &store_env)?;
+    let minter = read_gemini_minter_token(&state)?;
+    if request.dry_run {
+        add_audit(
+            &state,
+            &actor.agent_id,
+            "gemini_keys_issue",
+            &store_repo,
+            &store_env,
+            &key_name,
+            "allow",
+            "dry_run",
+        );
+        return Ok(Json(json!({
+            "dry_run": true,
+            "key_name": key_name,
+            "display_name": display_name,
+            "store_repo": store_repo,
+            "store_env": store_env,
+            "rotation": gemini_advisory(&state),
+        })));
+    }
+    let api_base = state.config.gemini.api_base.clone();
+    let project = state.config.gemini.project_id.clone();
+    let issued = tokio::task::spawn_blocking(move || {
+        crate::gemini::issue_key_once(&api_base, &minter, &project, &display_name)
+    })
+    .await
+    .map_err(|_| {
+        ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "gemini issuance task failed",
+        )
+    })?;
+    match issued {
+        Ok(key) => {
+            add_audit(
+                &state,
+                &actor.agent_id,
+                "gemini_keys_issue",
+                &store_repo,
+                &store_env,
+                &key.name,
+                "allow",
+                "",
+            );
+            Ok(Json(json!({
+                "key_name": key.name,
+                "api_key": key.key_string,
+                "store_repo": store_repo,
+                "store_env": store_env,
+                "stored": false,
+                "rotation": gemini_advisory(&state),
+            })))
+        }
+        Err(error) => {
+            add_audit(
+                &state,
+                &actor.agent_id,
+                "gemini_keys_issue",
+                &store_repo,
+                &store_env,
+                &key_name,
+                "deny",
+                &format!("google: {}", error.detail),
+            );
+            Err(ApiError::new(
+                StatusCode::BAD_GATEWAY,
+                format!("google gemini: {}", error.detail),
+            ))
+        }
+    }
+}
+
+async fn handle_gemini_keys_list(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<GeminiKeysListRequest>,
+) -> Result<Json<Value>, ApiError> {
+    let actor = require_actor(&headers, &state)?;
+    require_gemini_config(&state)?;
+    let gemini = &state.config.gemini;
+    let (allowed, reason) = state.store.check_permission(
+        &actor.agent_id,
+        &gemini.minter_repo,
+        &gemini.minter_env,
+        Operation::Get,
+    );
+    if !allowed {
+        add_audit(
+            &state,
+            &actor.agent_id,
+            "gemini_keys_list",
+            &gemini.minter_repo,
+            &gemini.minter_env,
+            "",
+            "deny",
+            reason,
+        );
+        return Err(ApiError::new(StatusCode::FORBIDDEN, "forbidden"));
+    }
+    if request.dry_run {
+        add_audit(
+            &state,
+            &actor.agent_id,
+            "gemini_keys_list",
+            &gemini.minter_repo,
+            &gemini.minter_env,
+            "",
+            "allow",
+            "dry_run",
+        );
+        return Ok(Json(json!({
+            "dry_run": true,
+            "rotation": gemini_advisory(&state),
+        })));
+    }
+    let api_base = gemini.api_base.clone();
+    let project = gemini.project_id.clone();
+    let minter = read_gemini_minter_token(&state)?;
+    let listed =
+        tokio::task::spawn_blocking(move || crate::gemini::list_keys(&api_base, &minter, &project))
+            .await
+            .map_err(|_| {
+                ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, "gemini list task failed")
+            })?;
+    match listed {
+        Ok(keys) => {
+            add_audit(
+                &state,
+                &actor.agent_id,
+                "gemini_keys_list",
+                &state.config.gemini.minter_repo,
+                &state.config.gemini.minter_env,
+                "",
+                "allow",
+                "",
+            );
+            Ok(Json(json!({
+                "keys": keys.iter().map(|key| json!({
+                    "key_name": key.name,
+                    "display_name": key.display_name,
+                })).collect::<Vec<_>>(),
+                "rotation": gemini_advisory(&state),
+            })))
+        }
+        Err(error) => {
+            add_audit(
+                &state,
+                &actor.agent_id,
+                "gemini_keys_list",
+                &state.config.gemini.minter_repo,
+                &state.config.gemini.minter_env,
+                "",
+                "deny",
+                &format!("google: {}", error.detail),
+            );
+            Err(ApiError::new(
+                StatusCode::BAD_GATEWAY,
+                format!("google gemini: {}", error.detail),
+            ))
+        }
+    }
+}
+
+async fn handle_gemini_keys_rotate(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<GeminiKeysRotateRequest>,
+) -> Result<Json<Value>, ApiError> {
+    let actor = require_actor(&headers, &state)?;
+    require_gemini_config(&state)?;
+    crate::gemini::reject_ttl_seconds(&request.ttl_seconds, state.config.gemini.rotation_days)
+        .map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, error.detail))?;
+    let key_name = request.key_name.trim().to_string();
+    let display_name = if request.display_name.trim().is_empty() {
+        key_name.clone()
+    } else {
+        request.display_name.trim().to_string()
+    };
+    let store_repo = request.store_repo.trim().to_string();
+    let store_env = request.store_env.trim().to_string();
+    if key_name.is_empty() || store_repo.is_empty() || store_env.is_empty() {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "key_name, store_repo, and store_env are required",
+        ));
+    }
+    check_gemini_mint_policy(&state, &actor, &store_repo, &store_env)?;
+    let old_resource = crate::gemini::key_resource(&state.config.gemini.project_id, &key_name)
+        .map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, error.detail))?;
+    let minter = read_gemini_minter_token(&state)?;
+    if request.dry_run {
+        add_audit(
+            &state,
+            &actor.agent_id,
+            "gemini_keys_rotate",
+            &store_repo,
+            &store_env,
+            &key_name,
+            "allow",
+            "dry_run",
+        );
+        return Ok(Json(json!({
+            "dry_run": true,
+            "key_name": old_resource,
+            "display_name": display_name,
+            "store_repo": store_repo,
+            "store_env": store_env,
+            "rotation": gemini_advisory(&state),
+        })));
+    }
+    let api_base = state.config.gemini.api_base.clone();
+    let project = state.config.gemini.project_id.clone();
+    let rotated = tokio::task::spawn_blocking(move || {
+        crate::gemini::rotate_key_once(&api_base, &minter, &project, &old_resource, &display_name)
+    })
+    .await
+    .map_err(|_| {
+        ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "gemini rotate task failed",
+        )
+    })?;
+    match rotated {
+        Ok(key) => {
+            add_audit(
+                &state,
+                &actor.agent_id,
+                "gemini_keys_rotate",
+                &store_repo,
+                &store_env,
+                &key.name,
+                "allow",
+                "",
+            );
+            Ok(Json(json!({
+                "key_name": key.name,
+                "api_key": key.key_string,
+                "rotated_from": request.key_name.trim(),
+                "store_repo": store_repo,
+                "store_env": store_env,
+                "stored": false,
+                "rotation": gemini_advisory(&state),
+            })))
+        }
+        Err(error) => {
+            add_audit(
+                &state,
+                &actor.agent_id,
+                "gemini_keys_rotate",
+                &store_repo,
+                &store_env,
+                &key_name,
+                "deny",
+                &format!("google: {}", error.detail),
+            );
+            Err(ApiError::new(
+                StatusCode::BAD_GATEWAY,
+                format!("google gemini: {}", error.detail),
+            ))
+        }
+    }
+}
+
+async fn handle_gemini_keys_revoke(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<GeminiKeysRevokeRequest>,
+) -> Result<Json<Value>, ApiError> {
+    let actor = require_actor(&headers, &state)?;
+    require_gemini_config(&state)?;
+    let gemini = &state.config.gemini;
+    let (allowed, reason) = state.store.check_permission(
+        &actor.agent_id,
+        &gemini.minter_repo,
+        &gemini.minter_env,
+        Operation::Get,
+    );
+    if !allowed {
+        add_audit(
+            &state,
+            &actor.agent_id,
+            "gemini_keys_revoke",
+            &gemini.minter_repo,
+            &gemini.minter_env,
+            request.key_name.trim(),
+            "deny",
+            reason,
+        );
+        return Err(ApiError::new(StatusCode::FORBIDDEN, "forbidden"));
+    }
+    let resource = crate::gemini::key_resource(&gemini.project_id, &request.key_name)
+        .map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, error.detail))?;
+    let minter = read_gemini_minter_token(&state)?;
+    if request.dry_run {
+        add_audit(
+            &state,
+            &actor.agent_id,
+            "gemini_keys_revoke",
+            &state.config.gemini.minter_repo,
+            &state.config.gemini.minter_env,
+            &resource,
+            "allow",
+            "dry_run",
+        );
+        return Ok(Json(json!({
+            "dry_run": true,
+            "key_name": resource,
+        })));
+    }
+    let api_base = state.config.gemini.api_base.clone();
+    let revoked = tokio::task::spawn_blocking(move || {
+        crate::gemini::delete_key(&api_base, &minter, &resource)
+    })
+    .await
+    .map_err(|_| {
+        ApiError::new(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "gemini revoke task failed",
+        )
+    })?;
+    match revoked {
+        Ok(()) => {
+            add_audit(
+                &state,
+                &actor.agent_id,
+                "gemini_keys_revoke",
+                &state.config.gemini.minter_repo,
+                &state.config.gemini.minter_env,
+                request.key_name.trim(),
+                "allow",
+                "",
+            );
+            Ok(Json(json!({
+                "revoked": true,
+                "key_name": request.key_name.trim(),
+            })))
+        }
+        Err(error) => {
+            add_audit(
+                &state,
+                &actor.agent_id,
+                "gemini_keys_revoke",
+                &state.config.gemini.minter_repo,
+                &state.config.gemini.minter_env,
+                request.key_name.trim(),
+                "deny",
+                &format!("google: {}", error.detail),
+            );
+            Err(ApiError::new(
+                StatusCode::BAD_GATEWAY,
+                format!("google gemini: {}", error.detail),
+            ))
+        }
+    }
+}
+
+async fn handle_gemini_keys_validate(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(request): Json<GeminiKeysValidateRequest>,
+) -> Result<Json<Value>, ApiError> {
+    let actor = require_actor(&headers, &state)?;
+    require_gemini_config(&state)?;
+    let gemini = &state.config.gemini;
+    let (allowed, reason) = state.store.check_permission(
+        &actor.agent_id,
+        &gemini.minter_repo,
+        &gemini.minter_env,
+        Operation::Get,
+    );
+    if !allowed {
+        add_audit(
+            &state,
+            &actor.agent_id,
+            "gemini_keys_validate",
+            &gemini.minter_repo,
+            &gemini.minter_env,
+            request.key_name.trim(),
+            "deny",
+            reason,
+        );
+        return Err(ApiError::new(StatusCode::FORBIDDEN, "forbidden"));
+    }
+    let resource = crate::gemini::key_resource(&gemini.project_id, &request.key_name)
+        .map_err(|error| ApiError::new(StatusCode::BAD_REQUEST, error.detail))?;
+    let minter = read_gemini_minter_token(&state)?;
+    let api_base = gemini.api_base.clone();
+    let checked =
+        tokio::task::spawn_blocking(move || crate::gemini::get_key(&api_base, &minter, &resource))
+            .await
+            .map_err(|_| {
+                ApiError::new(
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "gemini validate task failed",
+                )
+            })?;
+    match checked {
+        Ok(summary) => {
+            add_audit(
+                &state,
+                &actor.agent_id,
+                "gemini_keys_validate",
+                &state.config.gemini.minter_repo,
+                &state.config.gemini.minter_env,
+                &summary.name,
+                "allow",
+                "",
+            );
+            Ok(Json(json!({
+                "valid": true,
+                "key_name": summary.name,
+                "display_name": summary.display_name,
+                "rotation": gemini_advisory(&state),
+            })))
+        }
+        Err(error) => {
+            add_audit(
+                &state,
+                &actor.agent_id,
+                "gemini_keys_validate",
+                &state.config.gemini.minter_repo,
+                &state.config.gemini.minter_env,
+                request.key_name.trim(),
+                "deny",
+                &format!("google: {}", error.detail),
+            );
+            Err(ApiError::new(
+                StatusCode::BAD_GATEWAY,
+                format!("google gemini: {}", error.detail),
             ))
         }
     }

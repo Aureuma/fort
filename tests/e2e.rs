@@ -4728,3 +4728,173 @@ fn fort_keys_dry_runs_touch_neither_cloudflare_nor_fort() {
     child.kill().expect("kill fortd");
     child.wait().expect("wait fortd");
 }
+
+#[test]
+fn fort_gemini_keys_gate_config_and_reject_ttl() {
+    let temp = TempDir::new().expect("tempdir");
+    let state_dir = temp.path().join("state");
+    let safe_root = temp.path().join("safe");
+    let safe_repo = safe_root.join("safe");
+    fs::create_dir_all(&state_dir).expect("mkdir state");
+    fs::create_dir_all(&safe_repo).expect("mkdir safe");
+
+    let state_path = state_dir.join("state.json");
+    let keyring_path = state_dir.join("vault-keyring.json");
+    let signing_key_path = state_dir.join("jwt-signing.key");
+    let config_path = state_dir.join("fortd.toml");
+    let admin_token_path = state_dir.join("admin.token");
+
+    let admin_token = seed_state(&state_path, &keyring_path, &signing_key_path);
+    fs::write(&admin_token_path, admin_token.as_bytes()).expect("write admin token");
+    set_0600(&admin_token_path);
+
+    // Gemini issuer configured, but no minter credential is stored: requests
+    // must fail before any Google call, and ttl_seconds must be rejected.
+    fs::write(
+        &config_path,
+        format!(
+            "addr = \"{}\"\nstate_path = \"{}\"\njwt_signing_key_file = \"{}\"\nsafe_root = \"{}\"\nvault_keyring_file = \"{}\"\ntoken_ttl = \"15m\"\nrefresh_session_ttl = \"30d\"\nrun_ttl = \"60s\"\nsecret_ttl = \"120s\"\ngemini_api_base = \"http://127.0.0.1:1\"\ngemini_project_id = \"e2e-probe\"\ngemini_minter_repo = \"fort\"\ngemini_minter_env = \"prod\"\ngemini_minter_key = \"GEMINI_MINTER_SA\"\ngemini_rotation_days = \"7\"\n",
+            free_addr_placeholder(),
+            state_path.display(),
+            signing_key_path.display(),
+            safe_root.display(),
+            keyring_path.display(),
+        ),
+    )
+    .expect("write fortd config");
+
+    let addr = read_config_addr(&config_path);
+    let fortd = std::env::var("CARGO_BIN_EXE_fortd").expect("fortd path");
+    let fort = std::env::var("CARGO_BIN_EXE_fort").expect("fort path");
+    let host = format!("http://{addr}");
+    let mut child = Command::new(&fortd)
+        .args(["--config-file", config_path.to_str().expect("config path")])
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .expect("spawn fortd");
+    wait_for(Duration::from_secs(10), || {
+        Command::new(&fort)
+            .args([
+                "--host",
+                &host,
+                "--token-file",
+                admin_token_path.to_str().expect("admin token path"),
+                "doctor",
+            ])
+            .status()
+            .ok()
+            .is_some_and(|status| status.success())
+    });
+
+    // ttl_seconds is rejected with 400 before any policy or provider work.
+    let (status, body) = raw_post(
+        &addr,
+        "/v1/gemini/keys/issue",
+        admin_token.trim(),
+        r#"{"key_name":"k","store_repo":"safe","store_env":"dev","ttl_seconds":3600}"#,
+    );
+    assert_eq!(status, 400, "ttl body: {body}");
+    assert!(
+        body.contains("ttl_seconds is not supported"),
+        "ttl body: {body}"
+    );
+    assert!(
+        body.contains("NOT platform-enforced"),
+        "advisory label missing: {body}"
+    );
+
+    // Without a stored minter credential every surface fails closed (503)
+    // without contacting Google (api_base is unroutable by design).
+    for args in [
+        vec![
+            "keys",
+            "issue",
+            "gemini",
+            "--key-name",
+            "k",
+            "--store-repo",
+            "safe",
+            "--store-env",
+            "dev",
+        ],
+        vec![
+            "keys",
+            "rotate",
+            "gemini",
+            "--key-name",
+            "k",
+            "--store-repo",
+            "safe",
+            "--store-env",
+            "dev",
+        ],
+        vec!["keys", "revoke", "gemini", "--key-name", "k"],
+        vec!["keys", "list", "gemini"],
+        vec!["keys", "validate", "gemini", "--key-name", "k"],
+    ] {
+        let mut full = vec![
+            "--host",
+            host.as_str(),
+            "--token-file",
+            admin_token_path.to_str().unwrap(),
+        ];
+        full.extend(args);
+        let output = Command::new(&fort).args(&full).output().expect("run fort");
+        assert!(
+            !output.status.success(),
+            "gemini without minter credential must fail: {full:?}"
+        );
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            stderr.contains("gemini minter credential is not stored"),
+            "expected closed-gate 503, stderr: {stderr}"
+        );
+    }
+
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+fn free_addr_placeholder() -> String {
+    free_addr()
+}
+
+fn read_config_addr(config_path: &PathBuf) -> String {
+    let raw = fs::read_to_string(config_path).expect("read fortd config");
+    for line in raw.lines() {
+        if let Some(addr) = line.strip_prefix("addr = \"")
+            && let Some(addr) = addr.strip_suffix('"')
+        {
+            return addr.to_string();
+        }
+    }
+    panic!("addr missing in fortd config");
+}
+
+fn raw_post(host_addr: &str, path: &str, token: &str, body: &str) -> (u16, String) {
+    use std::io::{Read, Write};
+    let mut stream = std::net::TcpStream::connect(host_addr).expect("connect fortd");
+    stream
+        .set_read_timeout(Some(Duration::from_secs(10)))
+        .expect("read timeout");
+    let request = format!(
+        "POST {path} HTTP/1.1\r\nHost: {host_addr}\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+        body.len()
+    );
+    stream.write_all(request.as_bytes()).expect("write request");
+    let mut raw = Vec::new();
+    stream.read_to_end(&mut raw).expect("read response");
+    let text = String::from_utf8_lossy(&raw).to_string();
+    let status: u16 = text
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .split_whitespace()
+        .nth(1)
+        .unwrap_or("0")
+        .parse()
+        .unwrap_or(0);
+    let body = text.rsplit("\r\n\r\n").next().unwrap_or("").to_string();
+    (status, body)
+}

@@ -1,6 +1,7 @@
 pub mod auth;
 pub mod cli;
 pub mod config;
+pub mod gemini;
 pub mod github_auth;
 pub mod hostcfg;
 pub mod model;

@@ -150,8 +150,22 @@ enum KeysSubcommand {
     Revoke(KeysRevokeCommand),
     #[command(about = "List live provider credentials (never values)")]
     List(KeysListCommand),
+    #[command(about = "Check a live provider credential (never values)")]
+    Validate(KeysValidateCommand),
     #[command(about = "Reconcile live provider credentials against Fort")]
     Audit(KeysAuditCommand),
+}
+
+#[derive(Args)]
+struct KeysValidateCommand {
+    #[command(subcommand)]
+    command: KeysValidateProvider,
+}
+
+#[derive(Subcommand)]
+enum KeysValidateProvider {
+    #[command(about = "Check a live Gemini API key (never values)")]
+    Gemini(GeminiValidateArgs),
 }
 
 #[derive(Args)]
@@ -164,6 +178,8 @@ struct KeysIssueCommand {
 enum KeysIssueProvider {
     #[command(about = "Issue a temporary bucket-scoped R2 S3 credential")]
     R2(R2IssueArgs),
+    #[command(about = "Mint a Gemini API key (returned once, never stored)")]
+    Gemini(GeminiIssueArgs),
 }
 
 #[derive(Args)]
@@ -190,6 +206,8 @@ enum KeysRotateProvider {
     R2(Box<R2RotateArgs>),
     #[command(about = "Rotate an npm granular access token through Fort")]
     Npm(Box<NpmRotateArgs>),
+    #[command(about = "Rotate a Gemini API key (returned once, never stored)")]
+    Gemini(Box<GeminiRotateArgs>),
 }
 
 #[derive(Args)]
@@ -202,6 +220,8 @@ struct KeysRevokeCommand {
 enum KeysRevokeProvider {
     #[command(about = "Delete a Cloudflare account token")]
     R2(R2RevokeArgs),
+    #[command(about = "Delete a Gemini API key")]
+    Gemini(GeminiRevokeArgs),
 }
 
 #[derive(Args)]
@@ -214,6 +234,8 @@ struct KeysListCommand {
 enum KeysListProvider {
     #[command(about = "List live Cloudflare account tokens (never values)")]
     R2(R2ListArgs),
+    #[command(about = "List live Gemini API keys (never values)")]
+    Gemini(GeminiListArgs),
 }
 
 #[derive(Args)]
@@ -447,6 +469,68 @@ struct R2AuditArgs {
         help = "Repeatable Fort key to compare, as repo/env/key"
     )]
     checks: Vec<String>,
+}
+#[derive(Args)]
+struct GeminiIssueArgs {
+    #[arg(long, help = "Display name for the new Gemini API key")]
+    key_name: String,
+    #[arg(long, help = "Google displayName (defaults to --key-name)")]
+    display_name: Option<String>,
+    #[arg(
+        long,
+        help = "Policy repository scope allowed to persist the returned key"
+    )]
+    store_repo: String,
+    #[arg(
+        long,
+        help = "Policy environment scope allowed to persist the returned key"
+    )]
+    store_env: String,
+    #[arg(long, help = "Validate policy and shape without contacting Google")]
+    dry_run: bool,
+}
+
+#[derive(Args)]
+struct GeminiRotateArgs {
+    #[arg(long, help = "Current Gemini API key name or resource to replace")]
+    key_name: String,
+    #[arg(
+        long,
+        help = "Google displayName for the replacement (defaults to --key-name)"
+    )]
+    display_name: Option<String>,
+    #[arg(
+        long,
+        help = "Policy repository scope allowed to persist the returned key"
+    )]
+    store_repo: String,
+    #[arg(
+        long,
+        help = "Policy environment scope allowed to persist the returned key"
+    )]
+    store_env: String,
+    #[arg(long, help = "Validate policy and shape without contacting Google")]
+    dry_run: bool,
+}
+
+#[derive(Args)]
+struct GeminiRevokeArgs {
+    #[arg(long, help = "Gemini API key name or resource to delete")]
+    key_name: String,
+    #[arg(long, help = "Validate policy and shape without contacting Google")]
+    dry_run: bool,
+}
+
+#[derive(Args)]
+struct GeminiListArgs {
+    #[arg(long, help = "Validate policy without contacting Google")]
+    dry_run: bool,
+}
+
+#[derive(Args)]
+struct GeminiValidateArgs {
+    #[arg(long, help = "Gemini API key name or resource to check")]
+    key_name: String,
 }
 
 #[derive(Args)]
@@ -1469,6 +1553,7 @@ impl Client {
         match command {
             KeysSubcommand::Issue(command) => match command.command {
                 KeysIssueProvider::R2(args) => self.cmd_r2_issue(args),
+                KeysIssueProvider::Gemini(args) => self.cmd_keys_issue_gemini(args),
             },
             KeysSubcommand::Create(command) => match command.command {
                 KeysCreateProvider::R2(args) => self.cmd_keys_create_r2(args),
@@ -1476,12 +1561,18 @@ impl Client {
             KeysSubcommand::Rotate(command) => match command.command {
                 KeysRotateProvider::R2(args) => self.cmd_keys_rotate_r2(*args),
                 KeysRotateProvider::Npm(args) => self.cmd_rotate_npm(*args),
+                KeysRotateProvider::Gemini(args) => self.cmd_keys_rotate_gemini(*args),
             },
             KeysSubcommand::Revoke(command) => match command.command {
                 KeysRevokeProvider::R2(args) => self.cmd_keys_revoke_r2(args),
+                KeysRevokeProvider::Gemini(args) => self.cmd_keys_revoke_gemini(args),
             },
             KeysSubcommand::List(command) => match command.command {
                 KeysListProvider::R2(args) => self.cmd_keys_list_r2(args),
+                KeysListProvider::Gemini(args) => self.cmd_keys_list_gemini(args),
+            },
+            KeysSubcommand::Validate(command) => match command.command {
+                KeysValidateProvider::Gemini(args) => self.cmd_keys_validate_gemini(args),
             },
             KeysSubcommand::Audit(command) => match command.command {
                 KeysAuditProvider::R2(args) => self.cmd_keys_audit_r2(args),
@@ -1540,6 +1631,178 @@ impl Client {
             response["permission"].as_str().unwrap_or_default(),
             response["ttl_seconds"].as_u64().unwrap_or_default(),
             response["expires_at"].as_str().unwrap_or_default()
+        );
+        Ok(())
+    }
+    fn cmd_keys_issue_gemini(&self, args: GeminiIssueArgs) -> Result<()> {
+        let (status, response) = self.api_request(
+            Method::POST,
+            "/v1/gemini/keys/issue",
+            Some(json!({
+                "key_name": args.key_name,
+                "display_name": args.display_name.unwrap_or_default(),
+                "store_repo": args.store_repo,
+                "store_env": args.store_env,
+                "dry_run": args.dry_run
+            })),
+            true,
+        )?;
+        ensure_status(status, 200, &response)?;
+        if self.json {
+            return print_json(&response);
+        }
+        if args.dry_run {
+            println!(
+                "dry-run ok: would mint gemini key '{}' for {}/{}",
+                response["key_name"].as_str().unwrap_or_default(),
+                response["store_repo"].as_str().unwrap_or_default(),
+                response["store_env"].as_str().unwrap_or_default(),
+            );
+            return Ok(());
+        }
+        // Return-once: the value is printed here and never stored by Fort.
+        println!(
+            "key_name={}",
+            response["key_name"].as_str().unwrap_or_default()
+        );
+        println!(
+            "api_key={}",
+            response["api_key"].as_str().unwrap_or_default()
+        );
+        eprintln!(
+            "# store in {}/{} yourself via 'fort set'; rotation: {}",
+            response["store_repo"].as_str().unwrap_or_default(),
+            response["store_env"].as_str().unwrap_or_default(),
+            response["rotation"]["rotation_note"]
+                .as_str()
+                .unwrap_or_default(),
+        );
+        Ok(())
+    }
+
+    fn cmd_keys_rotate_gemini(&self, args: GeminiRotateArgs) -> Result<()> {
+        let (status, response) = self.api_request(
+            Method::POST,
+            "/v1/gemini/keys/rotate",
+            Some(json!({
+                "key_name": args.key_name,
+                "display_name": args.display_name.unwrap_or_default(),
+                "store_repo": args.store_repo,
+                "store_env": args.store_env,
+                "dry_run": args.dry_run
+            })),
+            true,
+        )?;
+        ensure_status(status, 200, &response)?;
+        if self.json {
+            return print_json(&response);
+        }
+        if args.dry_run {
+            println!(
+                "dry-run ok: would rotate gemini key '{}' for {}/{}",
+                response["key_name"].as_str().unwrap_or_default(),
+                response["store_repo"].as_str().unwrap_or_default(),
+                response["store_env"].as_str().unwrap_or_default(),
+            );
+            return Ok(());
+        }
+        println!(
+            "key_name={}",
+            response["key_name"].as_str().unwrap_or_default()
+        );
+        println!(
+            "api_key={}",
+            response["api_key"].as_str().unwrap_or_default()
+        );
+        eprintln!(
+            "# rotated from {}; store the new value in {}/{} yourself via 'fort set'; rotation: {}",
+            response["rotated_from"].as_str().unwrap_or_default(),
+            response["store_repo"].as_str().unwrap_or_default(),
+            response["store_env"].as_str().unwrap_or_default(),
+            response["rotation"]["rotation_note"]
+                .as_str()
+                .unwrap_or_default(),
+        );
+        Ok(())
+    }
+
+    fn cmd_keys_revoke_gemini(&self, args: GeminiRevokeArgs) -> Result<()> {
+        let (status, response) = self.api_request(
+            Method::POST,
+            "/v1/gemini/keys/revoke",
+            Some(json!({
+                "key_name": args.key_name,
+                "dry_run": args.dry_run
+            })),
+            true,
+        )?;
+        ensure_status(status, 200, &response)?;
+        if self.json {
+            return print_json(&response);
+        }
+        if args.dry_run {
+            println!(
+                "dry-run ok: would delete gemini key '{}'",
+                response["key_name"].as_str().unwrap_or_default(),
+            );
+            return Ok(());
+        }
+        println!(
+            "deleted_key={}",
+            response["key_name"].as_str().unwrap_or_default()
+        );
+        Ok(())
+    }
+
+    fn cmd_keys_list_gemini(&self, args: GeminiListArgs) -> Result<()> {
+        let (status, response) = self.api_request(
+            Method::POST,
+            "/v1/gemini/keys/list",
+            Some(json!({ "dry_run": args.dry_run })),
+            true,
+        )?;
+        ensure_status(status, 200, &response)?;
+        if self.json {
+            return print_json(&response);
+        }
+        if args.dry_run {
+            println!("dry-run ok: gemini issuer policy check passed");
+            return Ok(());
+        }
+        let empty = Vec::new();
+        let keys = response["keys"].as_array().unwrap_or(&empty);
+        for key in keys {
+            println!(
+                "{}\t{}",
+                key["key_name"].as_str().unwrap_or_default(),
+                key["display_name"].as_str().unwrap_or_default(),
+            );
+        }
+        eprintln!(
+            "# {} key(s); rotation: {}",
+            keys.len(),
+            response["rotation"]["rotation_note"]
+                .as_str()
+                .unwrap_or_default(),
+        );
+        Ok(())
+    }
+
+    fn cmd_keys_validate_gemini(&self, args: GeminiValidateArgs) -> Result<()> {
+        let (status, response) = self.api_request(
+            Method::POST,
+            "/v1/gemini/keys/validate",
+            Some(json!({ "key_name": args.key_name })),
+            true,
+        )?;
+        ensure_status(status, 200, &response)?;
+        if self.json {
+            return print_json(&response);
+        }
+        println!(
+            "valid={} key_name={}",
+            response["valid"].as_bool().unwrap_or(false),
+            response["key_name"].as_str().unwrap_or_default(),
         );
         Ok(())
     }

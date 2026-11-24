@@ -11,6 +11,7 @@ pub const DEFAULT_TOKEN_TTL: Duration = Duration::from_secs(15 * 60);
 pub const DEFAULT_REFRESH_SESSION_TTL: Duration = Duration::from_secs(90 * 24 * 60 * 60);
 pub const DEFAULT_RUN_TTL: Duration = Duration::from_secs(60);
 pub const DEFAULT_SECRET_TTL: Duration = Duration::from_secs(120);
+pub const DEFAULT_GEMINI_ROTATION_DAYS: u64 = 7;
 
 #[derive(Clone, Debug)]
 pub struct Config {
@@ -29,6 +30,38 @@ pub struct Config {
     pub github_pepper: Vec<u8>,
     pub github_api_base: String,
     pub r2: R2Config,
+    pub gemini: GeminiConfig,
+}
+
+/// Issuer configuration for Gemini (Google AI Studio) API key minting.
+///
+/// `rotation_days` is advisory only: Google Cloud API keys do not expire on a
+/// schedule, so Fort reports the rotation recommendation to callers but the
+/// platform does NOT enforce it.
+#[derive(Clone, Debug)]
+pub struct GeminiConfig {
+    pub api_base: String,
+    pub project_id: String,
+    pub minter_repo: String,
+    pub minter_env: String,
+    pub minter_key: String,
+    pub rotation_days: u64,
+}
+
+impl GeminiConfig {
+    /// The issuer is only active once a project id and minter key are set.
+    pub fn enabled(&self) -> bool {
+        !self.project_id.trim().is_empty() && !self.minter_key.trim().is_empty()
+    }
+
+    /// Advisory rotation note returned to callers. Labeled clearly as NOT
+    /// platform-enforced: API keys stay valid until deleted or rotated.
+    pub fn rotation_advisory(&self) -> String {
+        format!(
+            "advisory only: rotate every {} days; NOT platform-enforced, keys stay valid until deleted",
+            self.rotation_days
+        )
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -97,6 +130,20 @@ impl Config {
                 issuer_env: env_or("FORT_R2_ISSUER_ENV", ""),
                 issuer_token_key: env_or("FORT_R2_ISSUER_TOKEN_KEY", ""),
             },
+            gemini: GeminiConfig {
+                api_base: env_or(
+                    "FORT_GEMINI_API_BASE",
+                    crate::gemini::DEFAULT_GEMINI_API_BASE,
+                ),
+                project_id: env_or("FORT_GEMINI_PROJECT_ID", ""),
+                minter_repo: env_or("FORT_GEMINI_MINTER_REPO", ""),
+                minter_env: env_or("FORT_GEMINI_MINTER_ENV", ""),
+                minter_key: env_or("FORT_GEMINI_MINTER_KEY", ""),
+                rotation_days: parse_days_env(
+                    "FORT_GEMINI_ROTATION_DAYS",
+                    DEFAULT_GEMINI_ROTATION_DAYS,
+                ),
+            },
         })
     }
 
@@ -153,6 +200,20 @@ impl Config {
                 issuer_env: normalize_value(parsed.r2_issuer_env, ""),
                 issuer_token_key: normalize_value(parsed.r2_issuer_token_key, ""),
             },
+            gemini: GeminiConfig {
+                api_base: normalize_value(
+                    parsed.gemini_api_base,
+                    crate::gemini::DEFAULT_GEMINI_API_BASE,
+                ),
+                project_id: normalize_value(parsed.gemini_project_id, ""),
+                minter_repo: normalize_value(parsed.gemini_minter_repo, ""),
+                minter_env: normalize_value(parsed.gemini_minter_env, ""),
+                minter_key: normalize_value(parsed.gemini_minter_key, ""),
+                rotation_days: parse_days_value(
+                    parsed.gemini_rotation_days.as_deref(),
+                    DEFAULT_GEMINI_ROTATION_DAYS,
+                ),
+            },
         })
     }
 }
@@ -193,6 +254,18 @@ struct FileConfig {
     r2_issuer_env: String,
     #[serde(default)]
     r2_issuer_token_key: String,
+    #[serde(default)]
+    gemini_api_base: String,
+    #[serde(default)]
+    gemini_project_id: String,
+    #[serde(default)]
+    gemini_minter_repo: String,
+    #[serde(default)]
+    gemini_minter_env: String,
+    #[serde(default)]
+    gemini_minter_key: String,
+    #[serde(default)]
+    gemini_rotation_days: Option<String>,
 }
 
 pub fn env_trim(name: &str) -> String {
@@ -222,6 +295,21 @@ pub fn parse_duration_value(value: Option<&str>, fallback: Duration) -> Duration
         return fallback;
     }
     humantime_compat::parse_duration(value).unwrap_or(fallback)
+}
+pub fn parse_days_env(name: &str, fallback: u64) -> u64 {
+    parse_days_value(Some(env_trim(name).as_str()), fallback)
+}
+
+pub fn parse_days_value(value: Option<&str>, fallback: u64) -> u64 {
+    let value = value.unwrap_or_default().trim();
+    if value.is_empty() {
+        return fallback;
+    }
+    value
+        .parse::<u64>()
+        .ok()
+        .filter(|days| *days > 0)
+        .unwrap_or(fallback)
 }
 
 fn normalize_value(value: String, fallback: &str) -> String {
