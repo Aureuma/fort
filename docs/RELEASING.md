@@ -29,8 +29,15 @@ single-crate layout and GitHub + Homebrew-only distribution.
 - MAJOR changes remain exceptional and must be called out explicitly when
   they happen.
 - Grandfather note: tag `v1.0.8` (and its GitHub Release) predates this
-  policy and is the only published patch tag. No further patch tags will be
-  published.
+  policy.
+- Blocking-fix patch window (precedent: `v1.6.1`, published the same day
+  as `v1.6.0` for the Gemini `list_keys` pagination fix): a patch tag
+  `vX.Y.Z` (Z > 0) plus its GitHub Release may be published only when all
+  of these hold: the minor tag `vX.Y.0` is less than ~24h old, the patch
+  contains only the blocking fix (plus its changelog entry), and no other
+  patch tag exists on that minor line yet. Outside this window, patch
+  versions remain commit-scoped working versions only and no further patch
+  tags will be published.
 
 ## Changelog Format (Predefined)
 
@@ -83,7 +90,8 @@ git tag -l
 ```
 
 - Confirm there are no stray patch-version releases (other than the
-  grandfathered `v1.0.8`), no bare-tag releases such as `1.1.0`, and no
+  grandfathered `v1.0.8` or a blocking-fix patch under the window in
+  Versioning Rules), no bare-tag releases such as `1.1.0`, and no
   duplicate release entries for the same minor line.
 
 ### 1) Determine the next version + release name
@@ -143,7 +151,8 @@ git tag -a vX.Y.0 -m "vX.Y.0"
 
 - Annotated tags are recommended for releases and are the best practice
   (they store metadata like tagger, date, and message).
-- Do not create patch tags such as `vX.Y.1`.
+- Do not create patch tags such as `vX.Y.1` (except a blocking-fix patch
+  tag under the window in Versioning Rules).
 - Do not create bare tags such as `X.Y.0`.
 
 ### 6) Push commits and the new tag
@@ -321,7 +330,8 @@ Notes:
 - Tag names are canonical only in `vX.Y.0` form.
 - Do not create bare release tags such as `1.1.0`.
 - Do not create or keep patch-only release tags as part of the published
-  release surface (except the grandfathered `v1.0.8`).
+  release surface (except the grandfathered `v1.0.8` or a blocking-fix
+  patch tag under the window in Versioning Rules).
 
 ## Release Notes Style
 
