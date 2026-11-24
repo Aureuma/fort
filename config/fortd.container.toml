@@ -14,3 +14,8 @@ r2_account_id = "634187e6959e4bb9062f97fbf76ac9c8"
 r2_issuer_repo = "infra"
 r2_issuer_env = "prod"
 r2_issuer_token_key = "TOFU_CLOUDFLARE_R2_ISSUER_TOKEN"
+
+gemini_project_id = "gcp-terrabillion"
+gemini_minter_repo = "infra"
+gemini_minter_env = "prod"
+gemini_minter_key = "GEMINI_MINTER_ACCESS_TOKEN_TERRABILLION"
