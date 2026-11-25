@@ -489,6 +489,12 @@ struct GeminiIssueArgs {
         help = "Policy environment scope allowed to persist the returned key"
     )]
     store_env: String,
+    #[arg(
+        long,
+        default_value = "",
+        help = "GCP project (default: derived from --store-repo via gcp-<repo>, else issuer default)"
+    )]
+    project: String,
     #[arg(long, help = "Validate policy and shape without contacting Google")]
     dry_run: bool,
 }
@@ -515,6 +521,12 @@ struct GeminiRotateArgs {
         help = "Policy environment scope allowed to persist the returned key"
     )]
     store_env: String,
+    #[arg(
+        long,
+        default_value = "",
+        help = "GCP project (default: derived from --store-repo via gcp-<repo>, else issuer default)"
+    )]
+    project: String,
     #[arg(long, help = "Validate policy and shape without contacting Google")]
     dry_run: bool,
 }
@@ -526,6 +538,12 @@ struct GeminiRotateArgs {
 struct GeminiRevokeArgs {
     #[arg(long, help = "Gemini API key name or resource to delete")]
     key_name: String,
+    #[arg(
+        long,
+        default_value = "",
+        help = "GCP project (default: issuer default)"
+    )]
+    project: String,
     #[arg(long, help = "Validate policy and shape without contacting Google")]
     dry_run: bool,
 }
@@ -535,6 +553,12 @@ struct GeminiRevokeArgs {
     long_about = "Rotation is advisory only and NOT platform-enforced: Gemini API keys stay valid until deleted or rotated."
 )]
 struct GeminiListArgs {
+    #[arg(
+        long,
+        default_value = "",
+        help = "GCP project (default: issuer default)"
+    )]
+    project: String,
     #[arg(long, help = "Validate policy without contacting Google")]
     dry_run: bool,
 }
@@ -546,6 +570,12 @@ struct GeminiListArgs {
 struct GeminiValidateArgs {
     #[arg(long, help = "Gemini API key name or resource to check")]
     key_name: String,
+    #[arg(
+        long,
+        default_value = "",
+        help = "GCP project (default: issuer default)"
+    )]
+    project: String,
 }
 
 #[derive(Args)]
@@ -1658,6 +1688,7 @@ impl Client {
                 "display_name": args.display_name.unwrap_or_default(),
                 "store_repo": args.store_repo,
                 "store_env": args.store_env,
+                "project": args.project,
                 "dry_run": args.dry_run
             })),
             true,
@@ -1668,10 +1699,11 @@ impl Client {
         }
         if args.dry_run {
             println!(
-                "dry-run ok: would mint gemini key '{}' for {}/{}",
+                "dry-run ok: would mint gemini key '{}' for {}/{} in project '{}'",
                 response["key_name"].as_str().unwrap_or_default(),
                 response["store_repo"].as_str().unwrap_or_default(),
                 response["store_env"].as_str().unwrap_or_default(),
+                response["project"].as_str().unwrap_or_default(),
             );
             return Ok(());
         }
@@ -1704,6 +1736,7 @@ impl Client {
                 "display_name": args.display_name.unwrap_or_default(),
                 "store_repo": args.store_repo,
                 "store_env": args.store_env,
+                "project": args.project,
                 "dry_run": args.dry_run
             })),
             true,
@@ -1714,10 +1747,11 @@ impl Client {
         }
         if args.dry_run {
             println!(
-                "dry-run ok: would rotate gemini key '{}' for {}/{}",
+                "dry-run ok: would rotate gemini key '{}' for {}/{} in project '{}'",
                 response["key_name"].as_str().unwrap_or_default(),
                 response["store_repo"].as_str().unwrap_or_default(),
                 response["store_env"].as_str().unwrap_or_default(),
+                response["project"].as_str().unwrap_or_default(),
             );
             return Ok(());
         }
@@ -1747,6 +1781,7 @@ impl Client {
             "/v1/gemini/keys/revoke",
             Some(json!({
                 "key_name": args.key_name,
+                "project": args.project,
                 "dry_run": args.dry_run
             })),
             true,
@@ -1757,8 +1792,9 @@ impl Client {
         }
         if args.dry_run {
             println!(
-                "dry-run ok: would delete gemini key '{}'",
+                "dry-run ok: would delete gemini key '{}' in project '{}'",
                 response["key_name"].as_str().unwrap_or_default(),
+                response["project"].as_str().unwrap_or_default(),
             );
             return Ok(());
         }
@@ -1779,7 +1815,7 @@ impl Client {
         let (status, response) = self.api_request(
             Method::POST,
             "/v1/gemini/keys/list",
-            Some(json!({ "dry_run": args.dry_run })),
+            Some(json!({ "dry_run": args.dry_run, "project": args.project })),
             true,
         )?;
         ensure_status(status, 200, &response)?;
@@ -1787,7 +1823,10 @@ impl Client {
             return print_json(&response);
         }
         if args.dry_run {
-            println!("dry-run ok: gemini issuer policy check passed");
+            println!(
+                "dry-run ok: gemini issuer policy check passed for project '{}'",
+                response["project"].as_str().unwrap_or_default(),
+            );
             return Ok(());
         }
         let empty = Vec::new();
@@ -1813,7 +1852,7 @@ impl Client {
         let (status, response) = self.api_request(
             Method::POST,
             "/v1/gemini/keys/validate",
-            Some(json!({ "key_name": args.key_name })),
+            Some(json!({ "key_name": args.key_name, "project": args.project })),
             true,
         )?;
         ensure_status(status, 200, &response)?;

@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::env;
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -38,6 +39,10 @@ pub struct Config {
 /// `rotation_days` is advisory only: Google Cloud API keys do not expire on a
 /// schedule, so Fort reports the rotation recommendation to callers but the
 /// platform does NOT enforce it.
+///
+/// Multi-project: the top-level `project_id`/`minter_*` fields are the
+/// default (single-project) binding; `minters` holds extra per-project
+/// bindings keyed by GCP project id.
 #[derive(Clone, Debug)]
 pub struct GeminiConfig {
     pub api_base: String,
@@ -46,12 +51,90 @@ pub struct GeminiConfig {
     pub minter_env: String,
     pub minter_key: String,
     pub rotation_days: u64,
+    /// Extra per-project minter bindings, keyed by GCP project id. The
+    /// top-level `project_id`/`minter_*` fields stay the default binding
+    /// so single-project deployments keep working unchanged.
+    pub minters: HashMap<String, GeminiMinter>,
+}
+
+/// Per-project minter pointer for the Gemini issuer: which GCP project a
+/// minted key lives in, and which safe scope holds the minter bearer that
+/// funds the mint.
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct GeminiMinter {
+    #[serde(default)]
+    pub project_id: String,
+    #[serde(default)]
+    pub minter_repo: String,
+    #[serde(default)]
+    pub minter_env: String,
+    #[serde(default)]
+    pub minter_key: String,
+}
+
+impl GeminiMinter {
+    /// A binding is usable once it names a project and a minter key.
+    pub fn enabled(&self) -> bool {
+        !self.project_id.trim().is_empty() && !self.minter_key.trim().is_empty()
+    }
+
+    fn normalized(&self) -> Self {
+        Self {
+            project_id: self.project_id.trim().to_owned(),
+            minter_repo: self.minter_repo.trim().to_owned(),
+            minter_env: self.minter_env.trim().to_owned(),
+            minter_key: self.minter_key.trim().to_owned(),
+        }
+    }
 }
 
 impl GeminiConfig {
-    /// The issuer is only active once a project id and minter key are set.
+    /// The issuer is active once the default binding or any per-project
+    /// binding names a project and a minter key.
     pub fn enabled(&self) -> bool {
-        !self.project_id.trim().is_empty() && !self.minter_key.trim().is_empty()
+        (!self.project_id.trim().is_empty() && !self.minter_key.trim().is_empty())
+            || self.minters.values().any(GeminiMinter::enabled)
+    }
+
+    /// Default (single-project) binding built from the top-level fields.
+    pub fn default_minter(&self) -> GeminiMinter {
+        GeminiMinter {
+            project_id: self.project_id.trim().to_owned(),
+            minter_repo: self.minter_repo.trim().to_owned(),
+            minter_env: self.minter_env.trim().to_owned(),
+            minter_key: self.minter_key.trim().to_owned(),
+        }
+    }
+
+    /// Resolve which GCP project and minter pointer serves a request.
+    /// An explicit `project` wins; otherwise `gcp-{store_repo}` is used
+    /// when bound; otherwise the single-project default applies. Returns
+    /// the effective project id with its minter binding.
+    pub fn resolve_minter(
+        &self,
+        project: &str,
+        store_repo: &str,
+    ) -> Result<(String, GeminiMinter), String> {
+        let explicit = project.trim();
+        if !explicit.is_empty() {
+            if let Some(minter) = self.minters.get(explicit) {
+                return Ok((explicit.to_owned(), minter.normalized()));
+            }
+            if explicit == self.project_id.trim() && !self.project_id.trim().is_empty() {
+                return Ok((self.project_id.trim().to_owned(), self.default_minter()));
+            }
+            return Err(format!(
+                "unknown gemini project '{explicit}': no minter binding configured"
+            ));
+        }
+        let derived = format!("gcp-{}", store_repo.trim());
+        if let Some(minter) = self.minters.get(&derived) {
+            return Ok((derived, minter.normalized()));
+        }
+        if !self.project_id.trim().is_empty() {
+            return Ok((self.project_id.trim().to_owned(), self.default_minter()));
+        }
+        Err("gemini issuer is not configured".to_string())
     }
 
     /// Advisory rotation note returned to callers. Labeled clearly as NOT
@@ -143,6 +226,7 @@ impl Config {
                     "FORT_GEMINI_ROTATION_DAYS",
                     DEFAULT_GEMINI_ROTATION_DAYS,
                 ),
+                minters: parse_gemini_minters_env()?,
             },
         })
     }
@@ -213,6 +297,12 @@ impl Config {
                     parsed.gemini_rotation_days.as_deref(),
                     DEFAULT_GEMINI_ROTATION_DAYS,
                 ),
+                minters: parsed
+                    .gemini_minters
+                    .into_iter()
+                    .map(|(name, minter)| (name.trim().to_owned(), minter.normalized()))
+                    .filter(|(name, _)| !name.is_empty())
+                    .collect(),
             },
         })
     }
@@ -266,6 +356,11 @@ struct FileConfig {
     gemini_minter_key: String,
     #[serde(default)]
     gemini_rotation_days: Option<String>,
+    /// Extra per-project minter bindings:
+    /// `[gemini_minters."gcp-example"]` with `project_id`, `minter_repo`,
+    /// `minter_env`, and `minter_key` keys.
+    #[serde(default)]
+    gemini_minters: HashMap<String, GeminiMinter>,
 }
 
 pub fn env_trim(name: &str) -> String {
@@ -279,6 +374,25 @@ pub fn env_or(name: &str, fallback: &str) -> String {
     } else {
         value
     }
+}
+
+/// Optional `FORT_GEMINI_MINTERS` JSON object mapping GCP project ids to
+/// minter bindings, e.g.
+/// `{"gcp-lingospeak":{"project_id":"gcp-lingospeak","minter_repo":"infra",
+/// "minter_env":"prod","minter_key":"GEMINI_MINTER_ACCESS_TOKEN_LINGOSPEAK"}}`.
+/// Empty or unset means no extra bindings.
+pub fn parse_gemini_minters_env() -> Result<HashMap<String, GeminiMinter>> {
+    let raw = env_trim("FORT_GEMINI_MINTERS");
+    if raw.is_empty() {
+        return Ok(HashMap::new());
+    }
+    let parsed: HashMap<String, GeminiMinter> = serde_json::from_str(&raw)
+        .with_context(|| "parse FORT_GEMINI_MINTERS as a JSON object of minter bindings")?;
+    Ok(parsed
+        .into_iter()
+        .map(|(name, minter)| (name.trim().to_owned(), minter.normalized()))
+        .filter(|(name, _)| !name.is_empty())
+        .collect())
 }
 
 pub fn parse_duration_env(name: &str, fallback: Duration) -> Duration {
@@ -460,5 +574,149 @@ mod tests {
             config.refresh_session_ttl,
             Duration::from_secs(12 * 60 * 60)
         );
+    }
+
+    fn gemini_test_config() -> GeminiConfig {
+        let mut minters = HashMap::new();
+        minters.insert(
+            "gcp-lingospeak".to_string(),
+            GeminiMinter {
+                project_id: "gcp-lingospeak".to_string(),
+                minter_repo: "infra".to_string(),
+                minter_env: "prod".to_string(),
+                minter_key: "GEMINI_MINTER_ACCESS_TOKEN_LINGOSPEAK".to_string(),
+            },
+        );
+        minters.insert(
+            "gcp-releasemind".to_string(),
+            GeminiMinter {
+                project_id: "gcp-releasemind".to_string(),
+                minter_repo: "infra".to_string(),
+                minter_env: "prod".to_string(),
+                minter_key: "GEMINI_MINTER_ACCESS_TOKEN_RELEASEMIND".to_string(),
+            },
+        );
+        GeminiConfig {
+            api_base: crate::gemini::DEFAULT_GEMINI_API_BASE.to_string(),
+            project_id: "gcp-terrabillion".to_string(),
+            minter_repo: "infra".to_string(),
+            minter_env: "prod".to_string(),
+            minter_key: "GEMINI_MINTER_ACCESS_TOKEN_TERRABILLION".to_string(),
+            rotation_days: DEFAULT_GEMINI_ROTATION_DAYS,
+            minters,
+        }
+    }
+
+    #[test]
+    fn gemini_resolve_explicit_project_wins() {
+        let config = gemini_test_config();
+        let (project, minter) = config
+            .resolve_minter("gcp-lingospeak", "terrabillion")
+            .expect("resolve explicit");
+        assert_eq!(project, "gcp-lingospeak");
+        assert_eq!(minter.minter_key, "GEMINI_MINTER_ACCESS_TOKEN_LINGOSPEAK");
+    }
+
+    #[test]
+    fn gemini_resolve_explicit_default_project_uses_default_binding() {
+        let config = gemini_test_config();
+        let (project, minter) = config
+            .resolve_minter("gcp-terrabillion", "lingospeak")
+            .expect("resolve default");
+        assert_eq!(project, "gcp-terrabillion");
+        assert_eq!(minter.minter_key, "GEMINI_MINTER_ACCESS_TOKEN_TERRABILLION");
+    }
+
+    #[test]
+    fn gemini_resolve_derives_project_from_store_scope() {
+        let config = gemini_test_config();
+        let (project, minter) = config
+            .resolve_minter("", "releasemind")
+            .expect("resolve derived");
+        assert_eq!(project, "gcp-releasemind");
+        assert_eq!(minter.minter_key, "GEMINI_MINTER_ACCESS_TOKEN_RELEASEMIND");
+    }
+
+    #[test]
+    fn gemini_resolve_falls_back_to_default_binding() {
+        let config = gemini_test_config();
+        let (project, minter) = config
+            .resolve_minter("", "unknown-repo")
+            .expect("resolve fallback");
+        assert_eq!(project, "gcp-terrabillion");
+        assert_eq!(minter.minter_key, "GEMINI_MINTER_ACCESS_TOKEN_TERRABILLION");
+    }
+
+    #[test]
+    fn gemini_resolve_rejects_unknown_explicit_project() {
+        let config = gemini_test_config();
+        let error = config
+            .resolve_minter("gcp-nope", "lingospeak")
+            .expect_err("unknown project must fail");
+        assert!(error.contains("gcp-nope"), "error: {error}");
+    }
+
+    #[test]
+    fn gemini_enabled_with_minters_only_and_no_default() {
+        let mut config = gemini_test_config();
+        config.project_id.clear();
+        config.minter_key.clear();
+        assert!(config.enabled());
+        // No store-scope derivation and no default: resolution fails.
+        assert!(config.resolve_minter("", "unknown-repo").is_err());
+        // But the bound per-project binding still resolves explicitly.
+        let (project, _) = config
+            .resolve_minter("gcp-lingospeak", "")
+            .expect("resolve bound project");
+        assert_eq!(project, "gcp-lingospeak");
+    }
+
+    #[test]
+    fn gemini_disabled_without_any_binding() {
+        let config = GeminiConfig {
+            api_base: crate::gemini::DEFAULT_GEMINI_API_BASE.to_string(),
+            project_id: String::new(),
+            minter_repo: String::new(),
+            minter_env: String::new(),
+            minter_key: String::new(),
+            rotation_days: DEFAULT_GEMINI_ROTATION_DAYS,
+            minters: HashMap::new(),
+        };
+        assert!(!config.enabled());
+        assert!(config.resolve_minter("", "terrabillion").is_err());
+    }
+
+    #[test]
+    fn file_config_parses_gemini_minter_bindings() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let signing_key = dir.path().join("fort-jwt-signing.key");
+        fs::write(&signing_key, "test-signing-key-that-is-long-enough").expect("write key");
+        fs::set_permissions(&signing_key, fs::Permissions::from_mode(0o600))
+            .expect("set key permissions");
+
+        let config_path = dir.path().join("fort.toml");
+        fs::write(
+            &config_path,
+            format!(
+                "jwt_signing_key_file = \"{}\"\ngemini_project_id = \"gcp-terrabillion\"\ngemini_minter_key = \"GEMINI_MINTER_ACCESS_TOKEN_TERRABILLION\"\n[gemini_minters.\"gcp-lingospeak\"]\nproject_id = \"gcp-lingospeak\"\nminter_repo = \"infra\"\nminter_env = \"prod\"\nminter_key = \"GEMINI_MINTER_ACCESS_TOKEN_LINGOSPEAK\"\n",
+                signing_key.display()
+            ),
+        )
+        .expect("write config");
+
+        let config = Config::from_file(&config_path).expect("load config");
+        assert!(config.gemini.enabled());
+        let (project, minter) = config
+            .gemini
+            .resolve_minter("gcp-lingospeak", "terrabillion")
+            .expect("resolve bound project");
+        assert_eq!(project, "gcp-lingospeak");
+        assert_eq!(minter.minter_key, "GEMINI_MINTER_ACCESS_TOKEN_LINGOSPEAK");
+        // Single-project default still resolves for unbound scopes.
+        let (project, _) = config
+            .gemini
+            .resolve_minter("", "terrabillion")
+            .expect("resolve default");
+        assert_eq!(project, "gcp-terrabillion");
     }
 }
