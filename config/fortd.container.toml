@@ -31,3 +31,9 @@ project_id = "gcp-releasemind"
 minter_repo = "infra"
 minter_env = "prod"
 minter_key = "GEMINI_MINTER_ACCESS_TOKEN_RELEASEMIND"
+
+[gemini_minters."gcp-terra-terrabillion"]
+project_id = "gcp-terra-terrabillion"
+minter_repo = "infra"
+minter_env = "prod"
+minter_key = "GEMINI_MINTER_ACCESS_TOKEN_TERRA"
