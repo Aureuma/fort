@@ -13,6 +13,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [v1.7.0] - 2026-11-25
+
 ### Added
 
 - Extended the Gemini issuer to per-project minter bindings: extra
@@ -22,6 +24,19 @@ All notable changes to this project will be documented in this file.
   `--project`. Requests resolve the project from the explicit flag,
   otherwise from `gcp-<store-repo>` when bound, otherwise the existing
   single-project default, which keeps working unchanged.
+
+### Changed
+
+- Pointed the container Gemini issuer configuration at the terrabillion
+  estate (`gcp-terrabillion`), so the baked `fortd.toml` carries the live
+  minter scope holding the existing API keys.
+
+### Fixed
+
+- Fixed host resolution ignoring `[fort].host` in `settings.toml`: the
+  settings file is now parsed with TOML document semantics, so
+  `fort doctor` (and every command) resolves its host with no
+  `--host`/`FORT_HOST` override (#38).
 
 ## [v1.6.1] - 2026-11-24
 
