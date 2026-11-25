@@ -596,15 +596,6 @@ mod tests {
                 minter_key: "GEMINI_MINTER_ACCESS_TOKEN_RELEASEMIND".to_string(),
             },
         );
-        minters.insert(
-            "gcp-terrabillion".to_string(),
-            GeminiMinter {
-                project_id: "gcp-terrabillion".to_string(),
-                minter_repo: "infra".to_string(),
-                minter_env: "prod".to_string(),
-                minter_key: "GEMINI_MINTER_ACCESS_TOKEN_TERRABILLION".to_string(),
-            },
-        );
         GeminiConfig {
             api_base: crate::gemini::DEFAULT_GEMINI_API_BASE.to_string(),
             project_id: "gcp-terra-terrabillion".to_string(),
@@ -637,13 +628,12 @@ mod tests {
     }
 
     #[test]
-    fn gemini_resolve_explicit_prior_default_project_uses_minter_binding() {
+    fn gemini_resolve_rejects_removed_legacy_project() {
         let config = gemini_test_config();
-        let (project, minter) = config
+        let error = config
             .resolve_minter("gcp-terrabillion", "lingospeak")
-            .expect("resolve prior default");
-        assert_eq!(project, "gcp-terrabillion");
-        assert_eq!(minter.minter_key, "GEMINI_MINTER_ACCESS_TOKEN_TERRABILLION");
+            .expect_err("removed project must fail");
+        assert!(error.contains("gcp-terrabillion"), "error: {error}");
     }
 
     #[test]
@@ -717,7 +707,7 @@ mod tests {
         fs::write(
             &config_path,
             format!(
-                "jwt_signing_key_file = \"{}\"\ngemini_project_id = \"gcp-terra-terrabillion\"\ngemini_minter_key = \"GEMINI_MINTER_ACCESS_TOKEN_TERRA\"\n[gemini_minters.\"gcp-terrabillion\"]\nproject_id = \"gcp-terrabillion\"\nminter_repo = \"infra\"\nminter_env = \"prod\"\nminter_key = \"GEMINI_MINTER_ACCESS_TOKEN_TERRABILLION\"\n[gemini_minters.\"gcp-lingospeak\"]\nproject_id = \"gcp-lingospeak\"\nminter_repo = \"infra\"\nminter_env = \"prod\"\nminter_key = \"GEMINI_MINTER_ACCESS_TOKEN_LINGOSPEAK\"\n",
+                "jwt_signing_key_file = \"{}\"\ngemini_project_id = \"gcp-terra-terrabillion\"\ngemini_minter_key = \"GEMINI_MINTER_ACCESS_TOKEN_TERRA\"\n[gemini_minters.\"gcp-lingospeak\"]\nproject_id = \"gcp-lingospeak\"\nminter_repo = \"infra\"\nminter_env = \"prod\"\nminter_key = \"GEMINI_MINTER_ACCESS_TOKEN_LINGOSPEAK\"\n",
                 signing_key.display()
             ),
         )
@@ -738,11 +728,11 @@ mod tests {
             .expect("resolve default");
         assert_eq!(project, "gcp-terra-terrabillion");
         assert_eq!(minter.minter_key, "GEMINI_MINTER_ACCESS_TOKEN_TERRA");
-        // Prior default project stays bound explicitly.
-        let (project, _) = config
+        // Removed legacy project rejects cleanly (unknown project, not a 502).
+        let error = config
             .gemini
             .resolve_minter("gcp-terrabillion", "")
-            .expect("resolve prior default");
-        assert_eq!(project, "gcp-terrabillion");
+            .expect_err("removed project must fail");
+        assert!(error.contains("gcp-terrabillion"), "error: {error}");
     }
 }
