@@ -15,10 +15,16 @@ r2_issuer_repo = "infra"
 r2_issuer_env = "prod"
 r2_issuer_token_key = "TOFU_CLOUDFLARE_R2_ISSUER_TOKEN"
 
-gemini_project_id = "gcp-terrabillion"
+gemini_project_id = "gcp-terra-terrabillion"
 gemini_minter_repo = "infra"
 gemini_minter_env = "prod"
-gemini_minter_key = "GEMINI_MINTER_ACCESS_TOKEN_TERRABILLION"
+gemini_minter_key = "GEMINI_MINTER_ACCESS_TOKEN_TERRA"
+
+[gemini_minters."gcp-terrabillion"]
+project_id = "gcp-terrabillion"
+minter_repo = "infra"
+minter_env = "prod"
+minter_key = "GEMINI_MINTER_ACCESS_TOKEN_TERRABILLION"
 
 [gemini_minters."gcp-lingospeak"]
 project_id = "gcp-lingospeak"
