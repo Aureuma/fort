@@ -4951,6 +4951,147 @@ fn fort_gemini_keys_gate_config_and_reject_ttl() {
     let _ = child.wait();
 }
 
+#[test]
+fn fort_gemini_keys_multi_project_resolution() {
+    let temp = TempDir::new().expect("tempdir");
+    let state_dir = temp.path().join("state");
+    let safe_root = temp.path().join("safe");
+    let safe_repo = safe_root.join("safe");
+    fs::create_dir_all(&state_dir).expect("mkdir state");
+    fs::create_dir_all(&safe_repo).expect("mkdir safe");
+
+    let state_path = state_dir.join("state.json");
+    let keyring_path = state_dir.join("vault-keyring.json");
+    let signing_key_path = state_dir.join("jwt-signing.key");
+    let config_path = state_dir.join("fortd.toml");
+    let admin_token_path = state_dir.join("admin.token");
+
+    let admin_token = seed_state(&state_path, &keyring_path, &signing_key_path);
+    fs::write(&admin_token_path, admin_token.as_bytes()).expect("write admin token");
+    set_0600(&admin_token_path);
+
+    // Default binding (single-project back-compat) plus two per-project
+    // bindings: lingospeak and releasemind onboarded, terrabillion default.
+    fs::write(
+        &config_path,
+        format!(
+            "addr = \"{}\"\nstate_path = \"{}\"\njwt_signing_key_file = \"{}\"\nsafe_root = \"{}\"\nvault_keyring_file = \"{}\"\ntoken_ttl = \"15m\"\nrefresh_session_ttl = \"30d\"\nrun_ttl = \"60s\"\nsecret_ttl = \"120s\"\ngemini_api_base = \"http://127.0.0.1:1\"\ngemini_project_id = \"gcp-terrabillion\"\ngemini_minter_repo = \"fort\"\ngemini_minter_env = \"prod\"\ngemini_minter_key = \"GEMINI_MINTER_SA\"\ngemini_rotation_days = \"7\"\n[gemini_minters.\"gcp-lingospeak\"]\nproject_id = \"gcp-lingospeak\"\nminter_repo = \"infra\"\nminter_env = \"prod\"\nminter_key = \"GEMINI_MINTER_ACCESS_TOKEN_LINGOSPEAK\"\n[gemini_minters.\"gcp-releasemind\"]\nproject_id = \"gcp-releasemind\"\nminter_repo = \"infra\"\nminter_env = \"prod\"\nminter_key = \"GEMINI_MINTER_ACCESS_TOKEN_RELEASEMIND\"\n",
+            free_addr_placeholder(),
+            state_path.display(),
+            signing_key_path.display(),
+            safe_root.display(),
+            keyring_path.display(),
+        ),
+    )
+    .expect("write fortd config");
+
+    let addr = read_config_addr(&config_path);
+    let fortd = std::env::var("CARGO_BIN_EXE_fortd").expect("fortd path");
+    let fort = std::env::var("CARGO_BIN_EXE_fort").expect("fort path");
+    let host = format!("http://{addr}");
+    let mut child = Command::new(&fortd)
+        .args(["--config-file", config_path.to_str().expect("config path")])
+        .stdout(Stdio::null())
+        .stderr(Stdio::inherit())
+        .spawn()
+        .expect("spawn fortd");
+    wait_for(Duration::from_secs(10), || {
+        Command::new(&fort)
+            .args([
+                "--host",
+                &host,
+                "--token-file",
+                admin_token_path.to_str().expect("admin token path"),
+                "doctor",
+            ])
+            .status()
+            .ok()
+            .is_some_and(|status| status.success())
+    });
+
+    // Store-scope derivation: lingospeak store resolves gcp-lingospeak.
+    let (status, body) = raw_post(
+        &addr,
+        "/v1/gemini/keys/issue",
+        admin_token.trim(),
+        r#"{"key_name":"k","store_repo":"lingospeak","store_env":"prod","dry_run":true}"#,
+    );
+    assert_eq!(status, 200, "derived dry-run body: {body}");
+    assert!(
+        body.contains("\"project\":\"gcp-lingospeak\""),
+        "derived project missing: {body}"
+    );
+
+    // Explicit project wins over store-scope derivation.
+    let (status, body) = raw_post(
+        &addr,
+        "/v1/gemini/keys/issue",
+        admin_token.trim(),
+        r#"{"key_name":"k","store_repo":"lingospeak","store_env":"prod","project":"gcp-releasemind","dry_run":true}"#,
+    );
+    assert_eq!(status, 200, "explicit dry-run body: {body}");
+    assert!(
+        body.contains("\"project\":\"gcp-releasemind\""),
+        "explicit project missing: {body}"
+    );
+
+    // Unknown explicit projects fail before any vault or Google access.
+    let (status, body) = raw_post(
+        &addr,
+        "/v1/gemini/keys/issue",
+        admin_token.trim(),
+        r#"{"key_name":"k","store_repo":"lingospeak","store_env":"prod","project":"gcp-nope","dry_run":true}"#,
+    );
+    assert_eq!(status, 400, "unknown project body: {body}");
+    assert!(
+        body.contains("no minter binding configured"),
+        "unknown project detail missing: {body}"
+    );
+
+    // Unbound store scopes fall back to the single-project default.
+    let (status, body) = raw_post(
+        &addr,
+        "/v1/gemini/keys/list",
+        admin_token.trim(),
+        r#"{"dry_run":true}"#,
+    );
+    assert_eq!(status, 200, "default list dry-run body: {body}");
+    assert!(
+        body.contains("\"project\":\"gcp-terrabillion\""),
+        "default project missing: {body}"
+    );
+
+    // CLI --project plumbing: list dry-run against the bound project.
+    let output = Command::new(&fort)
+        .args([
+            "--host",
+            &host,
+            "--token-file",
+            admin_token_path.to_str().unwrap(),
+            "keys",
+            "list",
+            "gemini",
+            "--project",
+            "gcp-lingospeak",
+            "--dry-run",
+        ])
+        .output()
+        .expect("run fort");
+    assert!(
+        output.status.success(),
+        "cli list dry-run failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        String::from_utf8_lossy(&output.stdout).contains("gcp-lingospeak"),
+        "cli list dry-run missing project: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 fn free_addr_placeholder() -> String {
     free_addr()
 }

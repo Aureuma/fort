@@ -13,6 +13,16 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Extended the Gemini issuer to per-project minter bindings: extra
+  `[gemini_minters."<gcp-project>"]` bindings (or `FORT_GEMINI_MINTERS`
+  JSON) map each GCP project to its own minter safe scope, and every
+  `fort keys <issue|rotate|revoke|list|validate> gemini` command accepts
+  `--project`. Requests resolve the project from the explicit flag,
+  otherwise from `gcp-<store-repo>` when bound, otherwise the existing
+  single-project default, which keeps working unchanged.
+
 ## [v1.6.1] - 2026-11-24
 
 ### Fixed
