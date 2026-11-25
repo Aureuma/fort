@@ -19,3 +19,15 @@ gemini_project_id = "gcp-terrabillion"
 gemini_minter_repo = "infra"
 gemini_minter_env = "prod"
 gemini_minter_key = "GEMINI_MINTER_ACCESS_TOKEN_TERRABILLION"
+
+[gemini_minters."gcp-lingospeak"]
+project_id = "gcp-lingospeak"
+minter_repo = "infra"
+minter_env = "prod"
+minter_key = "GEMINI_MINTER_ACCESS_TOKEN_LINGOSPEAK"
+
+[gemini_minters."gcp-releasemind"]
+project_id = "gcp-releasemind"
+minter_repo = "infra"
+minter_env = "prod"
+minter_key = "GEMINI_MINTER_ACCESS_TOKEN_RELEASEMIND"
