@@ -13,14 +13,22 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Removed
+
+- Removed the explicit Gemini minter binding for the deleted
+  `gcp-terrabillion` project. Explicit `--project gcp-terrabillion`
+  requests now fail fast as unknown-project (400), and the Terra
+  (`gcp-terra-terrabillion`), LingoSpeak and ReleaseMind bindings are
+  unchanged.
+
 ### Changed
 
 - Repointed the container Gemini issuer default at the new Terra project
   (`gcp-terra-terrabillion`, minter scope `infra/prod` key
   `GEMINI_MINTER_ACCESS_TOKEN_TERRA`), so unqualified
-  `fort keys list gemini` serves the new-project keys; the prior default
-  project (`gcp-terrabillion`) stays bound explicitly, so every explicit
-  `--project` binding keeps working unchanged.
+  project (`gcp-terrabillion`) was kept bound explicitly at the time
+  (superseded by the Removed entry above now that the project is
+  deleted), so every explicit `--project` binding kept working unchanged.
 
 ## [v1.7.0] - 2026-11-25
 
